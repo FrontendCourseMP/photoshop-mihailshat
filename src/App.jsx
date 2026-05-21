@@ -9,6 +9,9 @@ import {
   Upload,
 } from 'lucide-react';
 import { decodeGb7, encodeGb7, imageHasTransparency } from './utils/gb7.js';
+import gradientHalfMaskUrl from '../gradient-half-mask.gb7?url';
+import kapibaraMaskUrl from '../kapibara-mask.gb7?url';
+import verticalKapibaraUrl from '../vertical-kapibara.gb7?url';
 
 const SUPPORTED_EXTENSIONS = ['png', 'jpg', 'jpeg', 'gb7'];
 const ZOOM_OPTIONS = [
@@ -16,6 +19,26 @@ const ZOOM_OPTIONS = [
   { value: '0.5', label: '50%' },
   { value: '1', label: '100%' },
   { value: '2', label: '200%' },
+];
+const SAMPLE_IMAGES = [
+  {
+    title: 'Градиент с маской',
+    fileName: 'gradient-half-mask.gb7',
+    path: gradientHalfMaskUrl,
+    type: 'application/octet-stream',
+  },
+  {
+    title: 'Капибара с маской',
+    fileName: 'kapibara-mask.gb7',
+    path: kapibaraMaskUrl,
+    type: 'application/octet-stream',
+  },
+  {
+    title: 'Вертикальная капибара',
+    fileName: 'vertical-kapibara.gb7',
+    path: verticalKapibaraUrl,
+    type: 'application/octet-stream',
+  },
 ];
 
 function getExtension(fileName) {
@@ -179,6 +202,26 @@ export default function App() {
     }
   }
 
+  async function openSample(sample) {
+    try {
+      setError('');
+      setNotice('');
+
+      const response = await fetch(sample.path);
+
+      if (!response.ok) {
+        throw new Error('Не удалось открыть тестовый файл.');
+      }
+
+      const blob = await response.blob();
+      const file = new File([blob], sample.fileName, { type: sample.type });
+
+      await openFile(file);
+    } catch (currentError) {
+      setError(currentError.message);
+    }
+  }
+
   function handleInputChange(event) {
     openFile(event.target.files?.[0]);
     event.target.value = '';
@@ -306,6 +349,21 @@ export default function App() {
             </div>
           </section>
 
+          <section className="samples-panel">
+            <div className="panel-heading">
+              <FileImage size={18} />
+              <h2>Тестовые файлы</h2>
+            </div>
+
+            <div className="sample-list">
+              {SAMPLE_IMAGES.map((sample) => (
+                <button className="sample-button" type="button" key={sample.fileName} onClick={() => openSample(sample)}>
+                  {sample.title}
+                </button>
+              ))}
+            </div>
+          </section>
+
           <section className="info-panel">
             <div className="panel-heading">
               <Info size={18} />
@@ -391,4 +449,3 @@ export default function App() {
     </div>
   );
 }
-
