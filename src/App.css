@@ -311,6 +311,31 @@ dl {
   grid-template-columns: 42px minmax(0, 1fr);
 }
 
+.scale-control {
+  display: grid;
+  gap: 12px;
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px solid #2d333c;
+}
+
+.scale-control label {
+  display: grid;
+  gap: 8px;
+  color: #96a39d;
+  font-size: 13px;
+}
+
+.scale-control input[type="range"] {
+  width: 100%;
+  accent-color: #35c2b4;
+}
+
+.scale-control select {
+  min-height: 34px;
+  padding: 0 10px;
+}
+
 .channel-list {
   display: grid;
   gap: 10px;
@@ -443,13 +468,6 @@ dl {
   image-rendering: auto;
   background: transparent;
   box-shadow: 0 18px 42px rgba(0, 0, 0, 0.42);
-}
-
-.fit-canvas {
-  max-width: 100%;
-  max-height: 100%;
-  width: auto;
-  height: auto;
 }
 
 .empty-state {

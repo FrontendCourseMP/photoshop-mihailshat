@@ -13,17 +13,12 @@ import {
   Upload,
 } from 'lucide-react';
 import { decodeGb7, encodeGb7, imageHasTransparency } from './utils/gb7.js';
+import { INTERPOLATION_METHODS, clampScale, scaleImageData } from './utils/interpolation.js';
 import gradientHalfMaskUrl from '../gradient-half-mask.gb7?url';
 import kapibaraMaskUrl from '../kapibara-mask.gb7?url';
 import verticalKapibaraUrl from '../vertical-kapibara.gb7?url';
 
 const SUPPORTED_EXTENSIONS = ['png', 'jpg', 'jpeg', 'gb7'];
-const ZOOM_OPTIONS = [
-  { value: 'fit', label: 'По размеру окна' },
-  { value: '0.5', label: '50%' },
-  { value: '1', label: '100%' },
-  { value: '2', label: '200%' },
-];
 const SAMPLE_IMAGES = [
   {
     title: 'Градиент с маской',
@@ -110,6 +105,17 @@ function createWhiteBackgroundCanvas(sourceCanvas) {
   context.drawImage(sourceCanvas, 0, 0);
 
   return preparedCanvas;
+}
+
+function imageDataToCanvas(imageData) {
+  const canvas = document.createElement('canvas');
+  const context = canvas.getContext('2d');
+
+  canvas.width = imageData.width;
+  canvas.height = imageData.height;
+  context.putImageData(imageData, 0, 0);
+
+  return canvas;
 }
 
 function isGrayscaleImage(imageData) {
@@ -485,6 +491,7 @@ function ChannelPreview({ channel, imageData, isActive, onToggle }) {
 
 export default function App() {
   const canvasRef = useRef(null);
+  const canvasAreaRef = useRef(null);
   const levelsDialogRef = useRef(null);
   const histogramRef = useRef(null);
   const fileInputRef = useRef(null);
@@ -499,12 +506,13 @@ export default function App() {
   const [levelsChannel, setLevelsChannel] = useState('master');
   const [levelsSettings, setLevelsSettings] = useState({});
   const [histogramMode, setHistogramMode] = useState('linear');
+  const [displayScale, setDisplayScale] = useState(100);
+  const [displayInterpolation, setDisplayInterpolation] = useState(INTERPOLATION_METHODS.bilinear.key);
   const [pickedColor, setPickedColor] = useState(null);
   const [activeTool, setActiveTool] = useState('view');
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [isDragging, setIsDragging] = useState(false);
-  const [zoom, setZoom] = useState('fit');
 
   const currentImageData = previewImageData ?? originalImageData;
   const channels = useMemo(() => (channelMode ? getChannelList(channelMode) : []), [channelMode]);
@@ -512,13 +520,30 @@ export default function App() {
   const currentLevels = normalizeLevels(levelsSettings[levelsChannel] ?? DEFAULT_LEVELS);
   const middleLevel = gammaToMiddle(currentLevels);
 
-  function drawImageData(imageData) {
+  function drawImageData(imageData, scale = displayScale, method = displayInterpolation) {
     const canvas = canvasRef.current;
     const context = canvas.getContext('2d', { willReadFrequently: true });
+    const scaledWidth = Math.max(1, Math.round((imageData.width * scale) / 100));
+    const scaledHeight = Math.max(1, Math.round((imageData.height * scale) / 100));
+    const scaledImageData = scaleImageData(imageData, scaledWidth, scaledHeight, method);
 
-    canvas.width = imageData.width;
-    canvas.height = imageData.height;
-    context.putImageData(imageData, 0, 0);
+    canvas.width = scaledImageData.width;
+    canvas.height = scaledImageData.height;
+    context.putImageData(scaledImageData, 0, 0);
+  }
+
+  function calculateInitialScale(imageData) {
+    const area = canvasAreaRef.current;
+
+    if (!area) {
+      return 100;
+    }
+
+    const availableWidth = Math.max(1, area.clientWidth - 100);
+    const availableHeight = Math.max(1, area.clientHeight - 100);
+    const scale = Math.min(availableWidth / imageData.width, availableHeight / imageData.height) * 100;
+
+    return clampScale(scale);
   }
 
   function prepareLoadedImage(imageData, info, warnings = '') {
@@ -536,7 +561,7 @@ export default function App() {
     setActiveChannels(nextChannels);
     setPickedColor(null);
     setNotice(warnings);
-    drawImageData(imageData);
+    setDisplayScale(calculateInitialScale(imageData));
   }
 
   useEffect(() => {
@@ -545,7 +570,7 @@ export default function App() {
     }
 
     drawImageData(applyChannelsToImage(currentImageData, activeChannels, channelMode));
-  }, [currentImageData, activeChannels, channelMode]);
+  }, [currentImageData, activeChannels, channelMode, displayScale, displayInterpolation]);
 
   useEffect(() => {
     const dialog = levelsDialogRef.current;
@@ -778,8 +803,10 @@ export default function App() {
 
     const canvas = canvasRef.current;
     const rect = canvas.getBoundingClientRect();
-    const x = Math.floor(((event.clientX - rect.left) / rect.width) * canvas.width);
-    const y = Math.floor(((event.clientY - rect.top) / rect.height) * canvas.height);
+    const renderedX = ((event.clientX - rect.left) / rect.width) * canvas.width;
+    const renderedY = ((event.clientY - rect.top) / rect.height) * canvas.height;
+    const x = Math.floor((renderedX / canvas.width) * currentImageData.width);
+    const y = Math.floor((renderedY / canvas.height) * currentImageData.height);
 
     if (x < 0 || y < 0 || x >= canvas.width || y >= canvas.height) {
       return;
@@ -800,26 +827,25 @@ export default function App() {
       return;
     }
 
-    const canvas = canvasRef.current;
+    const visibleImageData = applyChannelsToImage(currentImageData, activeChannels, channelMode);
+    const exportCanvas = imageDataToCanvas(visibleImageData);
 
     try {
       setError('');
 
       if (format === 'png') {
-        const blob = await canvasToBlob(canvas, 'image/png');
+        const blob = await canvasToBlob(exportCanvas, 'image/png');
         downloadBlob(blob, replaceExtension(imageInfo.name, 'png'));
       }
 
       if (format === 'jpg') {
-        const preparedCanvas = createWhiteBackgroundCanvas(canvas);
+        const preparedCanvas = createWhiteBackgroundCanvas(exportCanvas);
         const blob = await canvasToBlob(preparedCanvas, 'image/jpeg', 0.92);
         downloadBlob(blob, replaceExtension(imageInfo.name, 'jpg'));
       }
 
       if (format === 'gb7') {
-        const context = canvas.getContext('2d', { willReadFrequently: true });
-        const imageData = context.getImageData(0, 0, canvas.width, canvas.height);
-        const buffer = encodeGb7(imageData, canvas.width, canvas.height);
+        const buffer = encodeGb7(visibleImageData, visibleImageData.width, visibleImageData.height);
         const blob = new Blob([buffer], { type: 'application/octet-stream' });
 
         downloadBlob(blob, replaceExtension(imageInfo.name, 'gb7'));
@@ -845,17 +871,11 @@ export default function App() {
     setPickedColor(null);
     setActiveTool('view');
     setLevelsOpen(false);
+    setDisplayScale(100);
+    setDisplayInterpolation(INTERPOLATION_METHODS.bilinear.key);
     setError('');
     setNotice('');
   }
-
-  const canvasStyle =
-    imageInfo && zoom !== 'fit'
-      ? {
-          width: `${imageInfo.width * Number(zoom)}px`,
-          height: `${imageInfo.height * Number(zoom)}px`,
-        }
-      : undefined;
 
   return (
     <div className="app-shell">
@@ -985,6 +1005,34 @@ export default function App() {
                 <dd>{imageInfo?.fileSize ?? '-'}</dd>
               </div>
             </dl>
+
+            <div className="scale-control">
+              <label>
+                Масштаб: {displayScale}%
+                <input
+                  type="range"
+                  min="12"
+                  max="300"
+                  value={displayScale}
+                  onChange={(event) => setDisplayScale(clampScale(Number(event.target.value)))}
+                  disabled={!imageInfo}
+                />
+              </label>
+              <label>
+                Интерполяция
+                <select
+                  value={displayInterpolation}
+                  onChange={(event) => setDisplayInterpolation(event.target.value)}
+                  disabled={!imageInfo}
+                >
+                  {Object.values(INTERPOLATION_METHODS).map((method) => (
+                    <option key={method.key} value={method.key}>
+                      {method.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
           </section>
 
           <section className="channels-panel">
@@ -1015,22 +1063,11 @@ export default function App() {
           <div className="editor-toolbar">
             <div>
               <span className="toolbar-label">Холст</span>
-              <strong>{imageInfo ? `${imageInfo.width} x ${imageInfo.height}` : 'пусто'}</strong>
+              <strong>{imageInfo ? `${imageInfo.width} x ${imageInfo.height} / ${displayScale}%` : 'пусто'}</strong>
             </div>
-
-            <label className="zoom-control">
-              Масштаб
-              <select value={zoom} onChange={(event) => setZoom(event.target.value)} disabled={!imageInfo}>
-                {ZOOM_OPTIONS.map((option) => (
-                  <option key={option.value} value={option.value}>
-                    {option.label}
-                  </option>
-                ))}
-              </select>
-            </label>
           </div>
 
-          <div className={`canvas-area${activeTool === 'pipette' ? ' is-pipette' : ''}`}>
+          <div ref={canvasAreaRef} className={`canvas-area${activeTool === 'pipette' ? ' is-pipette' : ''}`}>
             {!imageInfo && (
               <div className="empty-state">
                 <FileImage size={42} />
@@ -1040,8 +1077,7 @@ export default function App() {
             )}
             <canvas
               ref={canvasRef}
-              className={`image-canvas${imageInfo && zoom === 'fit' ? ' fit-canvas' : ''}`}
-              style={canvasStyle}
+              className="image-canvas"
               onClick={handleCanvasClick}
             />
           </div>
