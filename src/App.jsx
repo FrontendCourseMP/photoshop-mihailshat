@@ -494,11 +494,42 @@ function ChannelPreview({ channel, imageData, isActive, onToggle }) {
   );
 }
 
+function AppDialog({ open, className, onClose, children }) {
+  const dialogRef = useRef(null);
+
+  useEffect(() => {
+    const dialog = dialogRef.current;
+
+    if (!dialog) {
+      return;
+    }
+
+    if (open && !dialog.open) {
+      dialog.showModal();
+    }
+
+    if (!open && dialog.open) {
+      dialog.close();
+    }
+  }, [open]);
+
+  return (
+    <dialog
+      ref={dialogRef}
+      className={className}
+      onCancel={(event) => {
+        event.preventDefault();
+        onClose();
+      }}
+    >
+      {children}
+    </dialog>
+  );
+}
+
 export default function App() {
   const canvasRef = useRef(null);
   const canvasAreaRef = useRef(null);
-  const levelsDialogRef = useRef(null);
-  const resizeDialogRef = useRef(null);
   const histogramRef = useRef(null);
   const fileInputRef = useRef(null);
   const [originalImageData, setOriginalImageData] = useState(null);
@@ -585,38 +616,6 @@ export default function App() {
 
     drawImageData(applyChannelsToImage(currentImageData, activeChannels, channelMode));
   }, [currentImageData, activeChannels, channelMode, displayScale, displayInterpolation]);
-
-  useEffect(() => {
-    const dialog = levelsDialogRef.current;
-
-    if (!dialog) {
-      return;
-    }
-
-    if (levelsOpen && !dialog.open) {
-      dialog.showModal();
-    }
-
-    if (!levelsOpen && dialog.open) {
-      dialog.close();
-    }
-  }, [levelsOpen]);
-
-  useEffect(() => {
-    const dialog = resizeDialogRef.current;
-
-    if (!dialog) {
-      return;
-    }
-
-    if (resizeOpen && !dialog.open) {
-      dialog.showModal();
-    }
-
-    if (!resizeOpen && dialog.open) {
-      dialog.close();
-    }
-  }, [resizeOpen]);
 
   useEffect(() => {
     if (!levelsOpen || !levelsPreview || !levelsBaseImageData) {
@@ -849,11 +848,19 @@ export default function App() {
       return 'Сначала откройте изображение.';
     }
 
-    if (!Number.isFinite(target.width) || !Number.isFinite(target.height)) {
+    const rawWidth = Number(resizeWidth);
+    const rawHeight = Number(resizeHeight);
+
+    if (
+      String(resizeWidth).trim() === '' ||
+      String(resizeHeight).trim() === '' ||
+      !Number.isFinite(rawWidth) ||
+      !Number.isFinite(rawHeight)
+    ) {
       return 'Введите числовые значения ширины и высоты.';
     }
 
-    if (target.width < 1 || target.height < 1) {
+    if (rawWidth < 1 || rawHeight < 1 || target.width < 1 || target.height < 1) {
       return 'Ширина и высота должны быть больше нуля.';
     }
 
@@ -964,7 +971,6 @@ export default function App() {
     setChannelMode(mode);
     setActiveChannels(nextChannels);
     setPickedColor(null);
-    setDisplayScale(calculateInitialScale(resizedImageData));
     setResizeOpen(false);
   }
 
@@ -980,7 +986,7 @@ export default function App() {
     const x = Math.floor((renderedX / canvas.width) * currentImageData.width);
     const y = Math.floor((renderedY / canvas.height) * currentImageData.height);
 
-    if (x < 0 || y < 0 || x >= canvas.width || y >= canvas.height) {
+    if (x < 0 || y < 0 || x >= currentImageData.width || y >= currentImageData.height) {
       return;
     }
 
@@ -1326,14 +1332,7 @@ export default function App() {
         </div>
       )}
 
-      <dialog
-        ref={levelsDialogRef}
-        className="levels-dialog"
-        onCancel={(event) => {
-          event.preventDefault();
-          cancelLevels();
-        }}
-      >
+      <AppDialog open={levelsOpen} className="levels-dialog" onClose={cancelLevels}>
         <form method="dialog" className="levels-content">
           <div className="levels-header">
             <div>
@@ -1465,16 +1464,9 @@ export default function App() {
             </button>
           </div>
         </form>
-      </dialog>
+      </AppDialog>
 
-      <dialog
-        ref={resizeDialogRef}
-        className="resize-dialog"
-        onCancel={(event) => {
-          event.preventDefault();
-          cancelResize();
-        }}
-      >
+      <AppDialog open={resizeOpen} className="resize-dialog" onClose={cancelResize}>
         <form method="dialog" className="resize-content">
           <div className="levels-header">
             <div>
@@ -1568,7 +1560,7 @@ export default function App() {
             </button>
           </div>
         </form>
-      </dialog>
+      </AppDialog>
 
       <footer className="statusbar">
         {imageInfo
