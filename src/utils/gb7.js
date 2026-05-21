@@ -93,7 +93,7 @@ export function decodeGb7(buffer) {
     width,
     height,
     hasMask,
-    colorDepth: hasMask ? 8 : 7,
+    colorDepth: 7,
     warnings,
   };
 }
@@ -135,4 +135,3 @@ export function encodeGb7(imageData, width, height, options = {}) {
 
   return bytes.buffer;
 }
-
