@@ -9,6 +9,7 @@
 
 - Репозиторий: https://github.com/FrontendCourseMP/photoshop-mihailshat
 - GitHub Pages: https://frontendcoursemp.github.io/photoshop-mihailshat/
+- Статическая версия: https://raw.githack.com/FrontendCourseMP/photoshop-mihailshat/gh-pages/index.html
 
 ## Возможности
 
