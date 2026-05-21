@@ -9,6 +9,7 @@ import {
   Info,
   Pipette,
   RotateCcw,
+  SlidersHorizontal,
   Upload,
 } from 'lucide-react';
 import { decodeGb7, encodeGb7, imageHasTransparency } from './utils/gb7.js';
@@ -43,6 +44,11 @@ const SAMPLE_IMAGES = [
     type: 'application/octet-stream',
   },
 ];
+const DEFAULT_LEVELS = {
+  black: 0,
+  white: 255,
+  gamma: 1,
+};
 
 function getExtension(fileName) {
   return fileName.split('.').pop()?.toLowerCase() ?? '';
@@ -169,6 +175,10 @@ function createEmptyImageData(width, height) {
   return new ImageData(width, height);
 }
 
+function cloneImageData(imageData) {
+  return new ImageData(new Uint8ClampedArray(imageData.data), imageData.width, imageData.height);
+}
+
 function isOnlyAlphaVisible(activeChannels) {
   const alphaEnabled = Boolean(activeChannels.alpha);
   const colorKeys = ['gray', 'red', 'green', 'blue'];
@@ -213,6 +223,147 @@ function applyChannelsToImage(imageData, activeChannels, mode) {
   }
 
   return result;
+}
+
+function getLevelsChannels(mode) {
+  const options = [{ key: 'master', label: 'Master' }];
+
+  if (mode?.startsWith('grayscale')) {
+    options.push({ key: 'gray', label: 'Gray' });
+  } else {
+    options.push(
+      { key: 'red', label: 'Red' },
+      { key: 'green', label: 'Green' },
+      { key: 'blue', label: 'Blue' },
+    );
+  }
+
+  if (mode?.includes('alpha')) {
+    options.push({ key: 'alpha', label: 'Alpha' });
+  }
+
+  return options;
+}
+
+function createDefaultLevelsSettings(mode) {
+  return Object.fromEntries(getLevelsChannels(mode).map((channel) => [channel.key, { ...DEFAULT_LEVELS }]));
+}
+
+function normalizeLevels(levels) {
+  const black = Math.min(Math.max(Number(levels.black), 0), 254);
+  const white = Math.max(Math.min(Number(levels.white), 255), black + 1);
+  const gamma = Math.min(Math.max(Number(levels.gamma), 0.1), 9.9);
+
+  return { black, white, gamma };
+}
+
+function gammaToMiddle(levels) {
+  const { black, white, gamma } = normalizeLevels(levels);
+  const normalized = 0.5 ** (1 / gamma);
+
+  return Math.round(black + normalized * (white - black));
+}
+
+function middleToGamma(middle, levels) {
+  const { black, white } = normalizeLevels(levels);
+  const normalized = Math.min(Math.max((middle - black) / (white - black), 0.001), 0.999);
+
+  return Math.min(Math.max(Math.log(0.5) / Math.log(normalized), 0.1), 9.9);
+}
+
+function makeLevelsLut(levels) {
+  const { black, white, gamma } = normalizeLevels(levels);
+  const lut = new Uint8ClampedArray(256);
+
+  for (let value = 0; value < 256; value += 1) {
+    const normalized = Math.min(Math.max((value - black) / (white - black), 0), 1);
+
+    lut[value] = Math.round((normalized ** gamma) * 255);
+  }
+
+  return lut;
+}
+
+function applyLevelsToImage(imageData, settings) {
+  const result = cloneImageData(imageData);
+  const data = result.data;
+  const master = makeLevelsLut(settings.master ?? DEFAULT_LEVELS);
+  const red = makeLevelsLut(settings.red ?? settings.gray ?? DEFAULT_LEVELS);
+  const green = makeLevelsLut(settings.green ?? settings.gray ?? DEFAULT_LEVELS);
+  const blue = makeLevelsLut(settings.blue ?? settings.gray ?? DEFAULT_LEVELS);
+  const gray = makeLevelsLut(settings.gray ?? DEFAULT_LEVELS);
+  const alpha = makeLevelsLut(settings.alpha ?? DEFAULT_LEVELS);
+
+  for (let i = 0; i < data.length; i += 4) {
+    data[i] = settings.gray ? gray[master[data[i]]] : red[master[data[i]]];
+    data[i + 1] = settings.gray ? gray[master[data[i + 1]]] : green[master[data[i + 1]]];
+    data[i + 2] = settings.gray ? gray[master[data[i + 2]]] : blue[master[data[i + 2]]];
+
+    if (settings.alpha) {
+      data[i + 3] = alpha[data[i + 3]];
+    }
+  }
+
+  return result;
+}
+
+function calculateHistogram(imageData, channelKey) {
+  const histogram = new Array(256).fill(0);
+  const data = imageData.data;
+
+  for (let i = 0; i < data.length; i += 4) {
+    let value = 0;
+
+    if (channelKey === 'red') {
+      value = data[i];
+    } else if (channelKey === 'green') {
+      value = data[i + 1];
+    } else if (channelKey === 'blue') {
+      value = data[i + 2];
+    } else if (channelKey === 'alpha') {
+      value = data[i + 3];
+    } else if (channelKey === 'gray') {
+      value = data[i];
+    } else {
+      value = Math.round(data[i] * 0.299 + data[i + 1] * 0.587 + data[i + 2] * 0.114);
+    }
+
+    histogram[value] += 1;
+  }
+
+  return histogram;
+}
+
+function drawHistogram(canvas, histogram, isLogarithmic) {
+  const context = canvas.getContext('2d');
+  const width = canvas.width;
+  const height = canvas.height;
+  const values = histogram.map((value) => (isLogarithmic ? Math.log1p(value) : value));
+  const max = Math.max(...values, 1);
+
+  context.clearRect(0, 0, width, height);
+  context.fillStyle = '#11151b';
+  context.fillRect(0, 0, width, height);
+  context.strokeStyle = '#2d333c';
+
+  for (let i = 0; i <= 4; i += 1) {
+    const y = Math.round((height / 4) * i);
+
+    context.beginPath();
+    context.moveTo(0, y);
+    context.lineTo(width, y);
+    context.stroke();
+  }
+
+  context.fillStyle = '#35c2b4';
+
+  values.forEach((value, index) => {
+    const barHeight = Math.max(1, Math.round((value / max) * (height - 8)));
+    const x = Math.floor((index / 256) * width);
+    const barWidth = Math.ceil(width / 256);
+
+    context.fillRect(x, height - barHeight, barWidth, barHeight);
+  });
 }
 
 function createChannelPreview(imageData, channel) {
@@ -334,11 +485,20 @@ function ChannelPreview({ channel, imageData, isActive, onToggle }) {
 
 export default function App() {
   const canvasRef = useRef(null);
+  const levelsDialogRef = useRef(null);
+  const histogramRef = useRef(null);
   const fileInputRef = useRef(null);
   const [originalImageData, setOriginalImageData] = useState(null);
+  const [previewImageData, setPreviewImageData] = useState(null);
+  const [levelsBaseImageData, setLevelsBaseImageData] = useState(null);
   const [imageInfo, setImageInfo] = useState(null);
   const [channelMode, setChannelMode] = useState(null);
   const [activeChannels, setActiveChannels] = useState({});
+  const [levelsOpen, setLevelsOpen] = useState(false);
+  const [levelsPreview, setLevelsPreview] = useState(true);
+  const [levelsChannel, setLevelsChannel] = useState('master');
+  const [levelsSettings, setLevelsSettings] = useState({});
+  const [histogramMode, setHistogramMode] = useState('linear');
   const [pickedColor, setPickedColor] = useState(null);
   const [activeTool, setActiveTool] = useState('view');
   const [error, setError] = useState('');
@@ -346,7 +506,11 @@ export default function App() {
   const [isDragging, setIsDragging] = useState(false);
   const [zoom, setZoom] = useState('fit');
 
+  const currentImageData = previewImageData ?? originalImageData;
   const channels = useMemo(() => (channelMode ? getChannelList(channelMode) : []), [channelMode]);
+  const levelsChannels = useMemo(() => getLevelsChannels(channelMode), [channelMode]);
+  const currentLevels = normalizeLevels(levelsSettings[levelsChannel] ?? DEFAULT_LEVELS);
+  const middleLevel = gammaToMiddle(currentLevels);
 
   function drawImageData(imageData) {
     const canvas = canvasRef.current;
@@ -362,6 +526,8 @@ export default function App() {
     const nextChannels = Object.fromEntries(getChannelList(mode).map((channel) => [channel.key, true]));
 
     setOriginalImageData(imageData);
+    setPreviewImageData(null);
+    setLevelsBaseImageData(null);
     setImageInfo({
       ...info,
       channelMode: getModeLabel(mode),
@@ -374,12 +540,51 @@ export default function App() {
   }
 
   useEffect(() => {
-    if (!originalImageData || !channelMode) {
+    if (!currentImageData || !channelMode) {
       return;
     }
 
-    drawImageData(applyChannelsToImage(originalImageData, activeChannels, channelMode));
-  }, [originalImageData, activeChannels, channelMode]);
+    drawImageData(applyChannelsToImage(currentImageData, activeChannels, channelMode));
+  }, [currentImageData, activeChannels, channelMode]);
+
+  useEffect(() => {
+    const dialog = levelsDialogRef.current;
+
+    if (!dialog) {
+      return;
+    }
+
+    if (levelsOpen && !dialog.open) {
+      dialog.showModal();
+    }
+
+    if (!levelsOpen && dialog.open) {
+      dialog.close();
+    }
+  }, [levelsOpen]);
+
+  useEffect(() => {
+    if (!levelsOpen || !levelsPreview || !levelsBaseImageData) {
+      setPreviewImageData(null);
+      return;
+    }
+
+    const frame = requestAnimationFrame(() => {
+      setPreviewImageData(applyLevelsToImage(levelsBaseImageData, levelsSettings));
+    });
+
+    return () => cancelAnimationFrame(frame);
+  }, [levelsOpen, levelsPreview, levelsBaseImageData, levelsSettings]);
+
+  useEffect(() => {
+    if (!levelsBaseImageData || !histogramRef.current) {
+      return;
+    }
+
+    const histogram = calculateHistogram(levelsBaseImageData, levelsChannel);
+
+    drawHistogram(histogramRef.current, histogram, histogramMode === 'log');
+  }, [levelsBaseImageData, levelsChannel, histogramMode]);
 
   async function loadBrowserImage(file) {
     const url = URL.createObjectURL(file);
@@ -458,6 +663,8 @@ export default function App() {
       }
     } catch (currentError) {
       setOriginalImageData(null);
+      setPreviewImageData(null);
+      setLevelsBaseImageData(null);
       setImageInfo(null);
       setChannelMode(null);
       setPickedColor(null);
@@ -507,8 +714,65 @@ export default function App() {
     }));
   }
 
+  function openLevelsDialog() {
+    if (!originalImageData || !channelMode) {
+      return;
+    }
+
+    const baseImageData = cloneImageData(originalImageData);
+
+    setLevelsBaseImageData(baseImageData);
+    setLevelsSettings(createDefaultLevelsSettings(channelMode));
+    setLevelsChannel('master');
+    setLevelsPreview(true);
+    setHistogramMode('linear');
+    setLevelsOpen(true);
+  }
+
+  function updateCurrentLevels(patch) {
+    setLevelsSettings((current) => {
+      const nextLevels = normalizeLevels({
+        ...(current[levelsChannel] ?? DEFAULT_LEVELS),
+        ...patch,
+      });
+
+      if (nextLevels.black >= nextLevels.white) {
+        nextLevels.black = Math.max(0, nextLevels.white - 1);
+      }
+
+      return {
+        ...current,
+        [levelsChannel]: nextLevels,
+      };
+    });
+  }
+
+  function resetLevels() {
+    setLevelsSettings(createDefaultLevelsSettings(channelMode));
+  }
+
+  function cancelLevels() {
+    setPreviewImageData(null);
+    setLevelsBaseImageData(null);
+    setLevelsOpen(false);
+  }
+
+  function applyLevels() {
+    if (!levelsBaseImageData) {
+      return;
+    }
+
+    const correctedImageData = applyLevelsToImage(levelsBaseImageData, levelsSettings);
+
+    setOriginalImageData(correctedImageData);
+    setPreviewImageData(null);
+    setLevelsBaseImageData(null);
+    setPickedColor(null);
+    setLevelsOpen(false);
+  }
+
   function handleCanvasClick(event) {
-    if (activeTool !== 'pipette' || !originalImageData) {
+    if (activeTool !== 'pipette' || !currentImageData) {
       return;
     }
 
@@ -521,11 +785,11 @@ export default function App() {
       return;
     }
 
-    const index = (y * originalImageData.width + x) * 4;
-    const red = originalImageData.data[index];
-    const green = originalImageData.data[index + 1];
-    const blue = originalImageData.data[index + 2];
-    const alpha = originalImageData.data[index + 3];
+    const index = (y * currentImageData.width + x) * 4;
+    const red = currentImageData.data[index];
+    const green = currentImageData.data[index + 1];
+    const blue = currentImageData.data[index + 2];
+    const alpha = currentImageData.data[index + 3];
     const lab = rgbToLab(red, green, blue);
 
     setPickedColor({ x, y, red, green, blue, alpha, lab });
@@ -573,11 +837,14 @@ export default function App() {
     canvas.width = 0;
     canvas.height = 0;
     setOriginalImageData(null);
+    setPreviewImageData(null);
+    setLevelsBaseImageData(null);
     setImageInfo(null);
     setChannelMode(null);
     setActiveChannels({});
     setPickedColor(null);
     setActiveTool('view');
+    setLevelsOpen(false);
     setError('');
     setNotice('');
   }
@@ -616,6 +883,10 @@ export default function App() {
           >
             <Pipette size={18} />
             Пипетка
+          </button>
+          <button className="tool-button" type="button" onClick={openLevelsDialog} disabled={!imageInfo}>
+            <SlidersHorizontal size={18} />
+            Уровни
           </button>
           <button type="button" onClick={() => downloadCurrent('png')} disabled={!imageInfo}>
             <Download size={18} />
@@ -728,7 +999,7 @@ export default function App() {
                   <ChannelPreview
                     key={channel.key}
                     channel={channel}
-                    imageData={originalImageData}
+                    imageData={currentImageData}
                     isActive={Boolean(activeChannels[channel.key])}
                     onToggle={() => toggleChannel(channel.key)}
                   />
@@ -843,6 +1114,147 @@ export default function App() {
         </div>
       )}
 
+      <dialog
+        ref={levelsDialogRef}
+        className="levels-dialog"
+        onCancel={(event) => {
+          event.preventDefault();
+          cancelLevels();
+        }}
+      >
+        <form method="dialog" className="levels-content">
+          <div className="levels-header">
+            <div>
+              <h2>Уровни</h2>
+              <p>Градационная коррекция изображения</p>
+            </div>
+            <button className="icon-button" type="button" onClick={cancelLevels} title="Закрыть">
+              <RotateCcw size={18} />
+            </button>
+          </div>
+
+          <div className="levels-row">
+            <label>
+              Канал
+              <select value={levelsChannel} onChange={(event) => setLevelsChannel(event.target.value)}>
+                {levelsChannels.map((channel) => (
+                  <option key={channel.key} value={channel.key}>
+                    {channel.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            <label>
+              Гистограмма
+              <select value={histogramMode} onChange={(event) => setHistogramMode(event.target.value)}>
+                <option value="linear">Линейная</option>
+                <option value="log">Логарифмическая</option>
+              </select>
+            </label>
+
+            <label className="checkbox-field">
+              <input
+                type="checkbox"
+                checked={levelsPreview}
+                onChange={(event) => setLevelsPreview(event.target.checked)}
+              />
+              Предпросмотр
+            </label>
+          </div>
+
+          <div className="histogram-box">
+            <canvas ref={histogramRef} width="512" height="180" />
+            <div className="histogram-scale">
+              <span>0</span>
+              <span>127</span>
+              <span>255</span>
+            </div>
+          </div>
+
+          <div className="level-sliders">
+            <label>
+              <span>Черная точка: {currentLevels.black}</span>
+              <input
+                type="range"
+                min="0"
+                max={currentLevels.white - 1}
+                value={currentLevels.black}
+                onChange={(event) => updateCurrentLevels({ black: Number(event.target.value) })}
+              />
+            </label>
+
+            <label>
+              <span>Полутона: γ {currentLevels.gamma.toFixed(2)}</span>
+              <input
+                type="range"
+                min={currentLevels.black + 1}
+                max={currentLevels.white - 1}
+                value={middleLevel}
+                onChange={(event) => updateCurrentLevels({ gamma: middleToGamma(Number(event.target.value), currentLevels) })}
+              />
+            </label>
+
+            <label>
+              <span>Белая точка: {currentLevels.white}</span>
+              <input
+                type="range"
+                min={currentLevels.black + 1}
+                max="255"
+                value={currentLevels.white}
+                onChange={(event) => updateCurrentLevels({ white: Number(event.target.value) })}
+              />
+            </label>
+          </div>
+
+          <div className="levels-values">
+            <label>
+              Black
+              <input
+                type="number"
+                min="0"
+                max={currentLevels.white - 1}
+                value={currentLevels.black}
+                onChange={(event) => updateCurrentLevels({ black: Number(event.target.value) })}
+              />
+            </label>
+            <label>
+              Gamma
+              <input
+                type="number"
+                min="0.1"
+                max="9.9"
+                step="0.1"
+                value={currentLevels.gamma}
+                onChange={(event) => updateCurrentLevels({ gamma: Number(event.target.value) })}
+              />
+            </label>
+            <label>
+              White
+              <input
+                type="number"
+                min={currentLevels.black + 1}
+                max="255"
+                value={currentLevels.white}
+                onChange={(event) => updateCurrentLevels({ white: Number(event.target.value) })}
+              />
+            </label>
+          </div>
+
+          <div className="levels-actions">
+            <button type="button" onClick={resetLevels}>
+              Сброс
+            </button>
+            <button type="button" onClick={cancelLevels}>
+              Отмена
+            </button>
+            <button className="primary-button" type="button" onClick={applyLevels}>
+              Применить
+            </button>
+          </div>
+        </form>
+      </dialog>
+
       <footer className="statusbar">
         {imageInfo
           ? `Ширина: ${imageInfo.width}px | Высота: ${imageInfo.height}px | Глубина цвета: ${imageInfo.colorDepth} бит`
@@ -851,4 +1263,3 @@ export default function App() {
     </div>
   );
 }
-
