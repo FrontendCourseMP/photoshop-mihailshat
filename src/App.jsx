@@ -7,6 +7,7 @@ import {
   FolderOpen,
   ImageDown,
   Info,
+  Maximize2,
   Pipette,
   RotateCcw,
   SlidersHorizontal,
@@ -460,6 +461,10 @@ function formatLab(value) {
   return Number.isFinite(value) ? value.toFixed(2) : '-';
 }
 
+function formatMegapixels(width, height) {
+  return `${((width * height) / 1_000_000).toFixed(3)} Мп`;
+}
+
 function ChannelPreview({ channel, imageData, isActive, onToggle }) {
   const previewRef = useRef(null);
 
@@ -493,6 +498,7 @@ export default function App() {
   const canvasRef = useRef(null);
   const canvasAreaRef = useRef(null);
   const levelsDialogRef = useRef(null);
+  const resizeDialogRef = useRef(null);
   const histogramRef = useRef(null);
   const fileInputRef = useRef(null);
   const [originalImageData, setOriginalImageData] = useState(null);
@@ -508,6 +514,12 @@ export default function App() {
   const [histogramMode, setHistogramMode] = useState('linear');
   const [displayScale, setDisplayScale] = useState(100);
   const [displayInterpolation, setDisplayInterpolation] = useState(INTERPOLATION_METHODS.bilinear.key);
+  const [resizeOpen, setResizeOpen] = useState(false);
+  const [resizeUnit, setResizeUnit] = useState('percent');
+  const [resizeWidth, setResizeWidth] = useState(100);
+  const [resizeHeight, setResizeHeight] = useState(100);
+  const [resizeLinked, setResizeLinked] = useState(true);
+  const [resizeMethod, setResizeMethod] = useState(INTERPOLATION_METHODS.bilinear.key);
   const [pickedColor, setPickedColor] = useState(null);
   const [activeTool, setActiveTool] = useState('view');
   const [error, setError] = useState('');
@@ -519,6 +531,8 @@ export default function App() {
   const levelsChannels = useMemo(() => getLevelsChannels(channelMode), [channelMode]);
   const currentLevels = normalizeLevels(levelsSettings[levelsChannel] ?? DEFAULT_LEVELS);
   const middleLevel = gammaToMiddle(currentLevels);
+  const resizeTarget = getResizeTarget();
+  const resizeError = validateResizeTarget(resizeTarget);
 
   function drawImageData(imageData, scale = displayScale, method = displayInterpolation) {
     const canvas = canvasRef.current;
@@ -587,6 +601,22 @@ export default function App() {
       dialog.close();
     }
   }, [levelsOpen]);
+
+  useEffect(() => {
+    const dialog = resizeDialogRef.current;
+
+    if (!dialog) {
+      return;
+    }
+
+    if (resizeOpen && !dialog.open) {
+      dialog.showModal();
+    }
+
+    if (!resizeOpen && dialog.open) {
+      dialog.close();
+    }
+  }, [resizeOpen]);
 
   useEffect(() => {
     if (!levelsOpen || !levelsPreview || !levelsBaseImageData) {
@@ -796,6 +826,148 @@ export default function App() {
     setLevelsOpen(false);
   }
 
+  function getResizeTarget() {
+    if (!originalImageData) {
+      return { width: 0, height: 0 };
+    }
+
+    if (resizeUnit === 'percent') {
+      return {
+        width: Math.max(1, Math.round((originalImageData.width * Number(resizeWidth)) / 100)),
+        height: Math.max(1, Math.round((originalImageData.height * Number(resizeHeight)) / 100)),
+      };
+    }
+
+    return {
+      width: Math.max(1, Math.round(Number(resizeWidth))),
+      height: Math.max(1, Math.round(Number(resizeHeight))),
+    };
+  }
+
+  function validateResizeTarget(target) {
+    if (!originalImageData) {
+      return 'Сначала откройте изображение.';
+    }
+
+    if (!Number.isFinite(target.width) || !Number.isFinite(target.height)) {
+      return 'Введите числовые значения ширины и высоты.';
+    }
+
+    if (target.width < 1 || target.height < 1) {
+      return 'Ширина и высота должны быть больше нуля.';
+    }
+
+    if (target.width > 8000 || target.height > 8000) {
+      return 'Максимальный размер по каждой стороне - 8000 пикселей.';
+    }
+
+    if (target.width * target.height > 64_000_000) {
+      return 'Итоговое изображение не должно быть больше 64 мегапикселей.';
+    }
+
+    if (resizeUnit === 'percent' && (Number(resizeWidth) < 1 || Number(resizeHeight) < 1)) {
+      return 'Проценты должны быть не меньше 1.';
+    }
+
+    if (resizeUnit === 'percent' && (Number(resizeWidth) > 1000 || Number(resizeHeight) > 1000)) {
+      return 'Проценты должны быть не больше 1000.';
+    }
+
+    return '';
+  }
+
+  function openResizeDialog() {
+    if (!originalImageData) {
+      return;
+    }
+
+    setResizeUnit('percent');
+    setResizeWidth(100);
+    setResizeHeight(100);
+    setResizeLinked(true);
+    setResizeMethod(INTERPOLATION_METHODS.bilinear.key);
+    setResizeOpen(true);
+  }
+
+  function changeResizeUnit(unit) {
+    if (!originalImageData) {
+      return;
+    }
+
+    setResizeUnit(unit);
+
+    if (unit === 'percent') {
+      setResizeWidth(100);
+      setResizeHeight(100);
+    } else {
+      setResizeWidth(originalImageData.width);
+      setResizeHeight(originalImageData.height);
+    }
+  }
+
+  function updateResizeWidth(value) {
+    const nextWidth = Number(value);
+
+    setResizeWidth(value);
+
+    if (!resizeLinked || !originalImageData || !Number.isFinite(nextWidth)) {
+      return;
+    }
+
+    if (resizeUnit === 'percent') {
+      setResizeHeight(value);
+      return;
+    }
+
+    setResizeHeight(Math.max(1, Math.round((nextWidth * originalImageData.height) / originalImageData.width)));
+  }
+
+  function updateResizeHeight(value) {
+    const nextHeight = Number(value);
+
+    setResizeHeight(value);
+
+    if (!resizeLinked || !originalImageData || !Number.isFinite(nextHeight)) {
+      return;
+    }
+
+    if (resizeUnit === 'percent') {
+      setResizeWidth(value);
+      return;
+    }
+
+    setResizeWidth(Math.max(1, Math.round((nextHeight * originalImageData.width) / originalImageData.height)));
+  }
+
+  function cancelResize() {
+    setResizeOpen(false);
+  }
+
+  function applyResize() {
+    if (!originalImageData || resizeError) {
+      return;
+    }
+
+    const resizedImageData = scaleImageData(originalImageData, resizeTarget.width, resizeTarget.height, resizeMethod);
+    const mode = getImageMode(resizedImageData);
+    const nextChannels = Object.fromEntries(getChannelList(mode).map((channel) => [channel.key, true]));
+
+    setOriginalImageData(resizedImageData);
+    setPreviewImageData(null);
+    setImageInfo((current) => ({
+      ...current,
+      width: resizedImageData.width,
+      height: resizedImageData.height,
+      channelMode: getModeLabel(mode),
+      fileSize: 'изменено',
+    }));
+    setChannelMode(mode);
+    setActiveChannels(nextChannels);
+    setPickedColor(null);
+    setDisplayScale(calculateInitialScale(resizedImageData));
+    setResizeOpen(false);
+  }
+
   function handleCanvasClick(event) {
     if (activeTool !== 'pipette' || !currentImageData) {
       return;
@@ -907,6 +1079,10 @@ export default function App() {
           <button className="tool-button" type="button" onClick={openLevelsDialog} disabled={!imageInfo}>
             <SlidersHorizontal size={18} />
             Уровни
+          </button>
+          <button className="tool-button" type="button" onClick={openResizeDialog} disabled={!imageInfo}>
+            <Maximize2 size={18} />
+            Размер
           </button>
           <button type="button" onClick={() => downloadCurrent('png')} disabled={!imageInfo}>
             <Download size={18} />
@@ -1285,6 +1461,109 @@ export default function App() {
               Отмена
             </button>
             <button className="primary-button" type="button" onClick={applyLevels}>
+              Применить
+            </button>
+          </div>
+        </form>
+      </dialog>
+
+      <dialog
+        ref={resizeDialogRef}
+        className="resize-dialog"
+        onCancel={(event) => {
+          event.preventDefault();
+          cancelResize();
+        }}
+      >
+        <form method="dialog" className="resize-content">
+          <div className="levels-header">
+            <div>
+              <h2>Размер изображения</h2>
+              <p>Изменение реального количества пикселей</p>
+            </div>
+            <button className="icon-button" type="button" onClick={cancelResize} title="Закрыть">
+              <RotateCcw size={18} />
+            </button>
+          </div>
+
+          <div className="pixel-summary">
+            <div>
+              <span>До</span>
+              <strong>{originalImageData ? formatMegapixels(originalImageData.width, originalImageData.height) : '-'}</strong>
+            </div>
+            <div>
+              <span>После</span>
+              <strong>{formatMegapixels(resizeTarget.width, resizeTarget.height)}</strong>
+            </div>
+          </div>
+
+          <div className="resize-grid">
+            <label>
+              Значения
+              <select value={resizeUnit} onChange={(event) => changeResizeUnit(event.target.value)}>
+                <option value="percent">Проценты</option>
+                <option value="pixels">Пиксели</option>
+              </select>
+            </label>
+
+            <label>
+              Ширина
+              <input
+                type="number"
+                min={resizeUnit === 'percent' ? 1 : 1}
+                max={resizeUnit === 'percent' ? 1000 : 8000}
+                value={resizeWidth}
+                onChange={(event) => updateResizeWidth(event.target.value)}
+              />
+            </label>
+
+            <label>
+              Высота
+              <input
+                type="number"
+                min={resizeUnit === 'percent' ? 1 : 1}
+                max={resizeUnit === 'percent' ? 1000 : 8000}
+                value={resizeHeight}
+                onChange={(event) => updateResizeHeight(event.target.value)}
+              />
+            </label>
+          </div>
+
+          <label className="checkbox-field resize-checkbox">
+            <input
+              type="checkbox"
+              checked={resizeLinked}
+              onChange={(event) => setResizeLinked(event.target.checked)}
+            />
+            Сохранять пропорции
+          </label>
+
+          <label className="resize-method">
+            Алгоритм интерполяции
+            <select value={resizeMethod} onChange={(event) => setResizeMethod(event.target.value)}>
+              {Object.values(INTERPOLATION_METHODS).map((method) => (
+                <option key={method.key} value={method.key}>
+                  {method.label}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <p className="method-tooltip" role="tooltip">
+            {INTERPOLATION_METHODS[resizeMethod].description}
+          </p>
+
+          <div className="resize-result">
+            Итоговый размер: {resizeTarget.width} x {resizeTarget.height} px
+          </div>
+
+          {resizeError && <p className="validation-message">{resizeError}</p>}
+
+          <div className="levels-actions">
+            <button type="button" onClick={cancelResize}>
+              Отмена
+            </button>
+            <button className="primary-button" type="button" onClick={applyResize} disabled={Boolean(resizeError)}>
               Применить
             </button>
           </div>

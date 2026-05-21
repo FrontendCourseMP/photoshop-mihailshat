@@ -503,7 +503,8 @@ dl {
   box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08);
 }
 
-.levels-dialog {
+.levels-dialog,
+.resize-dialog {
   width: min(760px, calc(100vw - 28px));
   max-height: calc(100vh - 28px);
   padding: 0;
@@ -515,11 +516,13 @@ dl {
   box-shadow: 0 24px 80px rgba(0, 0, 0, 0.48);
 }
 
-.levels-dialog::backdrop {
+.levels-dialog::backdrop,
+.resize-dialog::backdrop {
   background: rgba(4, 6, 10, 0.68);
 }
 
-.levels-content {
+.levels-content,
+.resize-content {
   display: grid;
   gap: 16px;
   padding: 18px;
@@ -626,6 +629,83 @@ dl {
   justify-content: flex-end;
   gap: 8px;
   padding-top: 4px;
+}
+
+.pixel-summary {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.pixel-summary div,
+.resize-result,
+.method-tooltip,
+.validation-message {
+  border: 1px solid #2f3540;
+  border-radius: 8px;
+  background: #141922;
+}
+
+.pixel-summary div {
+  display: grid;
+  gap: 4px;
+  padding: 12px;
+}
+
+.pixel-summary span,
+.resize-grid label,
+.resize-method {
+  color: #96a39d;
+  font-size: 13px;
+}
+
+.pixel-summary strong {
+  color: #f7fbf8;
+  font-size: 20px;
+}
+
+.resize-grid {
+  display: grid;
+  grid-template-columns: 1.1fr 1fr 1fr;
+  gap: 12px;
+}
+
+.resize-grid label,
+.resize-method {
+  display: grid;
+  gap: 7px;
+}
+
+.resize-grid select,
+.resize-grid input,
+.resize-method select {
+  min-height: 36px;
+  padding: 0 10px;
+}
+
+.resize-checkbox {
+  justify-self: start;
+}
+
+.method-tooltip {
+  padding: 11px 12px;
+  color: #cdd7d2;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.resize-result {
+  padding: 10px 12px;
+  color: #f7fbf8;
+  font-size: 14px;
+}
+
+.validation-message {
+  padding: 10px 12px;
+  color: #ffb7ad;
+  border-color: #8f4038;
+  background: #311b1a;
+  font-size: 13px;
 }
 
 .message-bar {
@@ -747,7 +827,9 @@ dl {
   }
 
   .levels-row,
-  .levels-values {
+  .levels-values,
+  .resize-grid,
+  .pixel-summary {
     grid-template-columns: 1fr;
   }
 
