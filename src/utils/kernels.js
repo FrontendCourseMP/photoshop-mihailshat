@@ -144,3 +144,44 @@ export async function applyKernelToImageData(imageData, options) {
 
   return result;
 }
+
+export async function applyMedianFilterToImageData(imageData, options) {
+  const selectedChannels = options.channels?.filter((channel) => channel in CHANNEL_INDEXES) ?? [];
+
+  if (selectedChannels.length === 0) {
+    throw new Error('Выберите хотя бы один канал для фильтрации.');
+  }
+
+  const edgeHandling = options.edgeHandling in EDGE_HANDLING ? options.edgeHandling : EDGE_HANDLING.copy.key;
+  const result = new ImageData(new Uint8ClampedArray(imageData.data), imageData.width, imageData.height);
+  const source = imageData.data;
+  const target = result.data;
+  const channelOffsets = selectedChannels.map((channel) => CHANNEL_INDEXES[channel]);
+  const { width, height } = imageData;
+  const rowsPerFrame = options.rowsPerFrame ?? 24;
+
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      const pixelIndex = (y * width + x) * 4;
+
+      channelOffsets.forEach((channelOffset) => {
+        const values = [];
+
+        for (let kernelY = 0; kernelY < 3; kernelY += 1) {
+          for (let kernelX = 0; kernelX < 3; kernelX += 1) {
+            values.push(getSample(source, width, height, x + kernelX - 1, y + kernelY - 1, channelOffset, edgeHandling));
+          }
+        }
+
+        values.sort((left, right) => left - right);
+        target[pixelIndex + channelOffset] = values[4];
+      });
+    }
+
+    if (y % rowsPerFrame === rowsPerFrame - 1) {
+      await waitForFrame();
+    }
+  }
+
+  return result;
+}

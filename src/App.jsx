@@ -20,6 +20,7 @@ import {
   EDGE_HANDLING,
   KERNEL_PRESETS,
   applyKernelToImageData,
+  applyMedianFilterToImageData,
   getPresetKernel,
   normalizeKernelValues,
 } from './utils/kernels.js';
@@ -52,6 +53,10 @@ const DEFAULT_LEVELS = {
   black: 0,
   white: 255,
   gamma: 1,
+};
+const FILTER_MODES = {
+  kernel: 'kernel',
+  median: 'median',
 };
 
 function getExtension(fileName) {
@@ -566,6 +571,7 @@ export default function App() {
   const [resizeLinked, setResizeLinked] = useState(true);
   const [resizeMethod, setResizeMethod] = useState(INTERPOLATION_METHODS.bilinear.key);
   const [filterOpen, setFilterOpen] = useState(false);
+  const [filterMode, setFilterMode] = useState(FILTER_MODES.kernel);
   const [filterPreview, setFilterPreview] = useState(true);
   const [filterPreset, setFilterPreset] = useState(KERNEL_PRESETS.identity.key);
   const [kernelValues, setKernelValues] = useState(getPresetKernel(KERNEL_PRESETS.identity.key).map(formatKernelValue));
@@ -673,11 +679,17 @@ export default function App() {
     filterPreviewJobRef.current = jobId;
     const frame = requestAnimationFrame(async () => {
       try {
-        const filteredImageData = await applyKernelToImageData(filterBaseImageData, {
-          kernel: normalizeKernelValues(kernelValues),
+        const filterOptions = {
           channels: getSelectedFilterChannels(),
           edgeHandling: filterEdgeHandling,
-        });
+        };
+        const filteredImageData =
+          filterMode === FILTER_MODES.median
+            ? await applyMedianFilterToImageData(filterBaseImageData, filterOptions)
+            : await applyKernelToImageData(filterBaseImageData, {
+                ...filterOptions,
+                kernel: normalizeKernelValues(kernelValues),
+              });
 
         if (filterPreviewJobRef.current === jobId) {
           setPreviewImageData(filteredImageData);
@@ -690,7 +702,7 @@ export default function App() {
     });
 
     return () => cancelAnimationFrame(frame);
-  }, [filterOpen, filterPreview, filterBaseImageData, kernelValues, filterChannels, filterEdgeHandling, filterError]);
+  }, [filterOpen, filterMode, filterPreview, filterBaseImageData, kernelValues, filterChannels, filterEdgeHandling, filterError]);
 
   useEffect(() => {
     if (!levelsBaseImageData || !histogramRef.current) {
@@ -891,7 +903,7 @@ export default function App() {
       return filterOpen ? 'Сначала откройте изображение.' : '';
     }
 
-    if (!normalizeKernelValues(kernelValues)) {
+    if (filterMode === FILTER_MODES.kernel && !normalizeKernelValues(kernelValues)) {
       return 'Все 9 значений ядра должны быть числами.';
     }
 
@@ -908,6 +920,7 @@ export default function App() {
     }
 
     setFilterBaseImageData(cloneImageData(originalImageData));
+    setFilterMode(FILTER_MODES.kernel);
     setFilterPreset(KERNEL_PRESETS.identity.key);
     setKernelValues(getPresetKernel(KERNEL_PRESETS.identity.key).map(formatKernelValue));
     setFilterChannels(createDefaultFilterChannels(channelMode));
@@ -926,6 +939,7 @@ export default function App() {
 
   function resetFilter() {
     setFilterPreset(KERNEL_PRESETS.identity.key);
+    setFilterMode(FILTER_MODES.kernel);
     setKernelValues(getPresetKernel(KERNEL_PRESETS.identity.key).map(formatKernelValue));
     setFilterChannels(createDefaultFilterChannels(channelMode));
     setFilterEdgeHandling(EDGE_HANDLING.copy.key);
@@ -958,11 +972,17 @@ export default function App() {
       setError('');
       setIsFiltering(true);
 
-      const filteredImageData = await applyKernelToImageData(filterBaseImageData, {
-        kernel: normalizeKernelValues(kernelValues),
+      const filterOptions = {
         channels: getSelectedFilterChannels(),
         edgeHandling: filterEdgeHandling,
-      });
+      };
+      const filteredImageData =
+        filterMode === FILTER_MODES.median
+          ? await applyMedianFilterToImageData(filterBaseImageData, filterOptions)
+          : await applyKernelToImageData(filterBaseImageData, {
+              ...filterOptions,
+              kernel: normalizeKernelValues(kernelValues),
+            });
       const mode = getImageMode(filteredImageData);
       const nextChannels = Object.fromEntries(getChannelList(mode).map((channel) => [channel.key, true]));
 
@@ -1690,8 +1710,20 @@ export default function App() {
 
           <div className="filter-grid">
             <label>
+              Тип фильтра
+              <select value={filterMode} onChange={(event) => setFilterMode(event.target.value)}>
+                <option value={FILTER_MODES.kernel}>Custom kernel 3x3</option>
+                <option value={FILTER_MODES.median}>Медианный 3x3</option>
+              </select>
+            </label>
+
+            <label>
               Предустановка
-              <select value={filterPreset} onChange={(event) => selectFilterPreset(event.target.value)}>
+              <select
+                value={filterPreset}
+                onChange={(event) => selectFilterPreset(event.target.value)}
+                disabled={filterMode === FILTER_MODES.median}
+              >
                 {Object.values(KERNEL_PRESETS).map((preset) => (
                   <option key={preset.key} value={preset.key}>
                     {preset.label}
@@ -1730,6 +1762,7 @@ export default function App() {
                 step="0.0001"
                 value={value}
                 onChange={(event) => updateKernelValue(index, event.target.value)}
+                disabled={filterMode === FILTER_MODES.median}
                 aria-label={`Значение ядра ${index + 1}`}
               />
             ))}
@@ -1750,7 +1783,11 @@ export default function App() {
           </fieldset>
 
           <div className="resize-result">
-            {isFiltering ? 'Фильтр применяется...' : 'Размер изображения сохраняется после обработки краёв.'}
+            {isFiltering
+              ? 'Фильтр применяется...'
+              : filterMode === FILTER_MODES.median
+                ? 'Медианный фильтр заменяет значение выбранного канала медианой соседей 3x3.'
+                : 'Размер изображения сохраняется после обработки краёв.'}
           </div>
 
           {filterError && <p className="validation-message">{filterError}</p>}

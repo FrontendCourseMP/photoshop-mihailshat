@@ -3,6 +3,7 @@ import {
   EDGE_HANDLING,
   KERNEL_PRESETS,
   applyKernelToImageData,
+  applyMedianFilterToImageData,
   normalizeKernelValues,
 } from '../src/utils/kernels.js';
 
@@ -79,6 +80,24 @@ const blackEdge = await applyKernelToImageData(source, {
   rowsPerFrame: 99,
 });
 assert.deepEqual(getPixel(blackEdge, 0, 0), [13, 1, 1, 255]);
+
+const noisy = makeImageData(3, 3, [
+  [10, 1, 1, 255],
+  [10, 1, 1, 255],
+  [10, 1, 1, 255],
+  [10, 1, 1, 255],
+  [250, 1, 1, 255],
+  [10, 1, 1, 255],
+  [10, 1, 1, 255],
+  [10, 1, 1, 255],
+  [10, 1, 1, 255],
+]);
+const median = await applyMedianFilterToImageData(noisy, {
+  channels: ['red'],
+  edgeHandling: EDGE_HANDLING.copy.key,
+  rowsPerFrame: 99,
+});
+assert.deepEqual(getPixel(median, 1, 1), [10, 1, 1, 255]);
 
 await assert.rejects(
   () =>
