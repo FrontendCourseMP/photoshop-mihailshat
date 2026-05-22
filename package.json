@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "test": "node scripts/test-interpolation.mjs",
+    "test": "node scripts/test-interpolation.mjs && node scripts/test-kernels.mjs",
     "preview": "vite preview"
   },
   "dependencies": {
