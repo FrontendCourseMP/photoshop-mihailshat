@@ -8,6 +8,7 @@ import {
   ImageDown,
   Info,
   Maximize2,
+  PanelTopOpen,
   Pipette,
   RotateCcw,
   SlidersHorizontal,
@@ -15,6 +16,13 @@ import {
 } from 'lucide-react';
 import { decodeGb7, encodeGb7, imageHasTransparency } from './utils/gb7.js';
 import { INTERPOLATION_METHODS, clampScale, scaleImageData } from './utils/interpolation.js';
+import {
+  EDGE_HANDLING,
+  KERNEL_PRESETS,
+  applyKernelToImageData,
+  getPresetKernel,
+  normalizeKernelValues,
+} from './utils/kernels.js';
 import gradientHalfMaskUrl from '../gradient-half-mask.gb7?url';
 import kapibaraMaskUrl from '../kapibara-mask.gb7?url';
 import verticalKapibaraUrl from '../vertical-kapibara.gb7?url';
@@ -465,6 +473,10 @@ function formatMegapixels(width, height) {
   return `${((width * height) / 1_000_000).toFixed(3)} Мп`;
 }
 
+function formatKernelValue(value) {
+  return Number.isInteger(value) ? String(value) : Number(value.toFixed(4)).toString();
+}
+
 function ChannelPreview({ channel, imageData, isActive, onToggle }) {
   const previewRef = useRef(null);
 
@@ -532,9 +544,11 @@ export default function App() {
   const canvasAreaRef = useRef(null);
   const histogramRef = useRef(null);
   const fileInputRef = useRef(null);
+  const filterPreviewJobRef = useRef(0);
   const [originalImageData, setOriginalImageData] = useState(null);
   const [previewImageData, setPreviewImageData] = useState(null);
   const [levelsBaseImageData, setLevelsBaseImageData] = useState(null);
+  const [filterBaseImageData, setFilterBaseImageData] = useState(null);
   const [imageInfo, setImageInfo] = useState(null);
   const [channelMode, setChannelMode] = useState(null);
   const [activeChannels, setActiveChannels] = useState({});
@@ -551,6 +565,18 @@ export default function App() {
   const [resizeHeight, setResizeHeight] = useState(100);
   const [resizeLinked, setResizeLinked] = useState(true);
   const [resizeMethod, setResizeMethod] = useState(INTERPOLATION_METHODS.bilinear.key);
+  const [filterOpen, setFilterOpen] = useState(false);
+  const [filterPreview, setFilterPreview] = useState(true);
+  const [filterPreset, setFilterPreset] = useState(KERNEL_PRESETS.identity.key);
+  const [kernelValues, setKernelValues] = useState(getPresetKernel(KERNEL_PRESETS.identity.key).map(formatKernelValue));
+  const [filterChannels, setFilterChannels] = useState({
+    red: true,
+    green: true,
+    blue: true,
+    alpha: false,
+  });
+  const [filterEdgeHandling, setFilterEdgeHandling] = useState(EDGE_HANDLING.copy.key);
+  const [isFiltering, setIsFiltering] = useState(false);
   const [pickedColor, setPickedColor] = useState(null);
   const [activeTool, setActiveTool] = useState('view');
   const [error, setError] = useState('');
@@ -564,6 +590,8 @@ export default function App() {
   const middleLevel = gammaToMiddle(currentLevels);
   const resizeTarget = getResizeTarget();
   const resizeError = validateResizeTarget(resizeTarget);
+  const filterChannelOptions = getFilterChannelOptions(channelMode);
+  const filterError = validateFilterSettings();
 
   function drawImageData(imageData, scale = displayScale, method = displayInterpolation) {
     const canvas = canvasRef.current;
@@ -598,6 +626,7 @@ export default function App() {
     setOriginalImageData(imageData);
     setPreviewImageData(null);
     setLevelsBaseImageData(null);
+    setFilterBaseImageData(null);
     setImageInfo({
       ...info,
       channelMode: getModeLabel(mode),
@@ -619,7 +648,9 @@ export default function App() {
 
   useEffect(() => {
     if (!levelsOpen || !levelsPreview || !levelsBaseImageData) {
-      setPreviewImageData(null);
+      if (!filterOpen) {
+        setPreviewImageData(null);
+      }
       return;
     }
 
@@ -629,6 +660,37 @@ export default function App() {
 
     return () => cancelAnimationFrame(frame);
   }, [levelsOpen, levelsPreview, levelsBaseImageData, levelsSettings]);
+
+  useEffect(() => {
+    if (!filterOpen || !filterPreview || !filterBaseImageData || filterError) {
+      if (!levelsOpen) {
+        setPreviewImageData(null);
+      }
+      return;
+    }
+
+    const jobId = filterPreviewJobRef.current + 1;
+    filterPreviewJobRef.current = jobId;
+    const frame = requestAnimationFrame(async () => {
+      try {
+        const filteredImageData = await applyKernelToImageData(filterBaseImageData, {
+          kernel: normalizeKernelValues(kernelValues),
+          channels: getSelectedFilterChannels(),
+          edgeHandling: filterEdgeHandling,
+        });
+
+        if (filterPreviewJobRef.current === jobId) {
+          setPreviewImageData(filteredImageData);
+        }
+      } catch {
+        if (filterPreviewJobRef.current === jobId) {
+          setPreviewImageData(null);
+        }
+      }
+    });
+
+    return () => cancelAnimationFrame(frame);
+  }, [filterOpen, filterPreview, filterBaseImageData, kernelValues, filterChannels, filterEdgeHandling, filterError]);
 
   useEffect(() => {
     if (!levelsBaseImageData || !histogramRef.current) {
@@ -719,6 +781,7 @@ export default function App() {
       setOriginalImageData(null);
       setPreviewImageData(null);
       setLevelsBaseImageData(null);
+      setFilterBaseImageData(null);
       setImageInfo(null);
       setChannelMode(null);
       setPickedColor(null);
@@ -783,6 +846,145 @@ export default function App() {
     setLevelsOpen(true);
   }
 
+  function getFilterChannelOptions(mode) {
+    if (!mode) {
+      return [];
+    }
+
+    if (mode.startsWith('grayscale')) {
+      const options = [{ key: 'red', label: 'Gray' }];
+
+      if (mode.includes('alpha')) {
+        options.push({ key: 'alpha', label: 'Alpha' });
+      }
+
+      return options;
+    }
+
+    const options = [
+      { key: 'red', label: 'Red' },
+      { key: 'green', label: 'Green' },
+      { key: 'blue', label: 'Blue' },
+    ];
+
+    if (mode.includes('alpha')) {
+      options.push({ key: 'alpha', label: 'Alpha' });
+    }
+
+    return options;
+  }
+
+  function createDefaultFilterChannels(mode) {
+    return Object.fromEntries(
+      getFilterChannelOptions(mode).map((channel) => [channel.key, channel.key !== 'alpha']),
+    );
+  }
+
+  function getSelectedFilterChannels() {
+    return Object.entries(filterChannels)
+      .filter(([, isSelected]) => isSelected)
+      .map(([channel]) => channel);
+  }
+
+  function validateFilterSettings() {
+    if (!filterBaseImageData) {
+      return filterOpen ? 'Сначала откройте изображение.' : '';
+    }
+
+    if (!normalizeKernelValues(kernelValues)) {
+      return 'Все 9 значений ядра должны быть числами.';
+    }
+
+    if (getSelectedFilterChannels().length === 0) {
+      return 'Выберите хотя бы один канал для фильтрации.';
+    }
+
+    return '';
+  }
+
+  function openFilterDialog() {
+    if (!originalImageData || !channelMode) {
+      return;
+    }
+
+    setFilterBaseImageData(cloneImageData(originalImageData));
+    setFilterPreset(KERNEL_PRESETS.identity.key);
+    setKernelValues(getPresetKernel(KERNEL_PRESETS.identity.key).map(formatKernelValue));
+    setFilterChannels(createDefaultFilterChannels(channelMode));
+    setFilterEdgeHandling(EDGE_HANDLING.copy.key);
+    setFilterPreview(true);
+    setFilterOpen(true);
+  }
+
+  function cancelFilter() {
+    filterPreviewJobRef.current += 1;
+    setPreviewImageData(null);
+    setFilterBaseImageData(null);
+    setFilterOpen(false);
+    setIsFiltering(false);
+  }
+
+  function resetFilter() {
+    setFilterPreset(KERNEL_PRESETS.identity.key);
+    setKernelValues(getPresetKernel(KERNEL_PRESETS.identity.key).map(formatKernelValue));
+    setFilterChannels(createDefaultFilterChannels(channelMode));
+    setFilterEdgeHandling(EDGE_HANDLING.copy.key);
+    setFilterPreview(true);
+  }
+
+  function selectFilterPreset(presetKey) {
+    setFilterPreset(presetKey);
+    setKernelValues(getPresetKernel(presetKey).map(formatKernelValue));
+  }
+
+  function updateKernelValue(index, value) {
+    setFilterPreset('custom');
+    setKernelValues((current) => current.map((item, itemIndex) => (itemIndex === index ? value : item)));
+  }
+
+  function toggleFilterChannel(channelKey) {
+    setFilterChannels((current) => ({
+      ...current,
+      [channelKey]: !current[channelKey],
+    }));
+  }
+
+  async function applyFilter() {
+    if (!filterBaseImageData || filterError || isFiltering) {
+      return;
+    }
+
+    try {
+      setError('');
+      setIsFiltering(true);
+
+      const filteredImageData = await applyKernelToImageData(filterBaseImageData, {
+        kernel: normalizeKernelValues(kernelValues),
+        channels: getSelectedFilterChannels(),
+        edgeHandling: filterEdgeHandling,
+      });
+      const mode = getImageMode(filteredImageData);
+      const nextChannels = Object.fromEntries(getChannelList(mode).map((channel) => [channel.key, true]));
+
+      setOriginalImageData(filteredImageData);
+      setPreviewImageData(null);
+      setFilterBaseImageData(null);
+      setImageInfo((current) => ({
+        ...current,
+        channelMode: getModeLabel(mode),
+        fileSize: 'изменено',
+      }));
+      setChannelMode(mode);
+      setActiveChannels(nextChannels);
+      setPickedColor(null);
+      setFilterOpen(false);
+    } catch (currentError) {
+      setError(currentError.message);
+    } finally {
+      setIsFiltering(false);
+    }
+  }
+
   function updateCurrentLevels(patch) {
     setLevelsSettings((current) => {
       const nextLevels = normalizeLevels({
@@ -821,6 +1023,7 @@ export default function App() {
     setOriginalImageData(correctedImageData);
     setPreviewImageData(null);
     setLevelsBaseImageData(null);
+    setFilterBaseImageData(null);
     setPickedColor(null);
     setLevelsOpen(false);
   }
@@ -961,6 +1164,7 @@ export default function App() {
 
     setOriginalImageData(resizedImageData);
     setPreviewImageData(null);
+    setFilterBaseImageData(null);
     setImageInfo((current) => ({
       ...current,
       width: resizedImageData.width,
@@ -1043,12 +1247,14 @@ export default function App() {
     setOriginalImageData(null);
     setPreviewImageData(null);
     setLevelsBaseImageData(null);
+    setFilterBaseImageData(null);
     setImageInfo(null);
     setChannelMode(null);
     setActiveChannels({});
     setPickedColor(null);
     setActiveTool('view');
     setLevelsOpen(false);
+    setFilterOpen(false);
     setDisplayScale(100);
     setDisplayInterpolation(INTERPOLATION_METHODS.bilinear.key);
     setError('');
@@ -1085,6 +1291,10 @@ export default function App() {
           <button className="tool-button" type="button" onClick={openLevelsDialog} disabled={!imageInfo}>
             <SlidersHorizontal size={18} />
             Уровни
+          </button>
+          <button className="tool-button" type="button" onClick={openFilterDialog} disabled={!imageInfo}>
+            <PanelTopOpen size={18} />
+            Фильтр
           </button>
           <button className="tool-button" type="button" onClick={openResizeDialog} disabled={!imageInfo}>
             <Maximize2 size={18} />
@@ -1460,6 +1670,99 @@ export default function App() {
               Отмена
             </button>
             <button className="primary-button" type="button" onClick={applyLevels}>
+              Применить
+            </button>
+          </div>
+        </form>
+      </AppDialog>
+
+      <AppDialog open={filterOpen} className="filter-dialog" onClose={cancelFilter}>
+        <form method="dialog" className="filter-content">
+          <div className="levels-header">
+            <div>
+              <h2>Фильтр Custom</h2>
+              <p>Свёртка изображения ядром 3x3</p>
+            </div>
+            <button className="icon-button" type="button" onClick={cancelFilter} title="Закрыть">
+              <RotateCcw size={18} />
+            </button>
+          </div>
+
+          <div className="filter-grid">
+            <label>
+              Предустановка
+              <select value={filterPreset} onChange={(event) => selectFilterPreset(event.target.value)}>
+                {Object.values(KERNEL_PRESETS).map((preset) => (
+                  <option key={preset.key} value={preset.key}>
+                    {preset.label}
+                  </option>
+                ))}
+                <option value="custom">Пользовательское ядро</option>
+              </select>
+            </label>
+
+            <label>
+              Заполнение края
+              <select value={filterEdgeHandling} onChange={(event) => setFilterEdgeHandling(event.target.value)}>
+                {Object.values(EDGE_HANDLING).map((edge) => (
+                  <option key={edge.key} value={edge.key}>
+                    {edge.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            <label className="checkbox-field">
+              <input
+                type="checkbox"
+                checked={filterPreview}
+                onChange={(event) => setFilterPreview(event.target.checked)}
+              />
+              Предпросмотр
+            </label>
+          </div>
+
+          <div className="kernel-editor" aria-label="Ядро 3 на 3">
+            {kernelValues.map((value, index) => (
+              <input
+                key={index}
+                type="number"
+                step="0.0001"
+                value={value}
+                onChange={(event) => updateKernelValue(index, event.target.value)}
+                aria-label={`Значение ядра ${index + 1}`}
+              />
+            ))}
+          </div>
+
+          <fieldset className="filter-channels">
+            <legend>Каналы</legend>
+            {filterChannelOptions.map((channel) => (
+              <label className="checkbox-field" key={channel.key}>
+                <input
+                  type="checkbox"
+                  checked={Boolean(filterChannels[channel.key])}
+                  onChange={() => toggleFilterChannel(channel.key)}
+                />
+                {channel.label}
+              </label>
+            ))}
+          </fieldset>
+
+          <div className="resize-result">
+            {isFiltering ? 'Фильтр применяется...' : 'Размер изображения сохраняется после обработки краёв.'}
+          </div>
+
+          {filterError && <p className="validation-message">{filterError}</p>}
+
+          <div className="levels-actions">
+            <button type="button" onClick={resetFilter} disabled={isFiltering}>
+              Сбросить
+            </button>
+            <button type="button" onClick={cancelFilter} disabled={isFiltering}>
+              Закрыть
+            </button>
+            <button className="primary-button" type="button" onClick={applyFilter} disabled={Boolean(filterError) || isFiltering}>
               Применить
             </button>
           </div>

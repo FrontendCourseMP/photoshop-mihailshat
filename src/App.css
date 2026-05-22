@@ -504,7 +504,8 @@ dl {
 }
 
 .levels-dialog,
-.resize-dialog {
+.resize-dialog,
+.filter-dialog {
   width: min(760px, calc(100vw - 28px));
   max-height: calc(100vh - 28px);
   padding: 0;
@@ -517,12 +518,14 @@ dl {
 }
 
 .levels-dialog::backdrop,
-.resize-dialog::backdrop {
+.resize-dialog::backdrop,
+.filter-dialog::backdrop {
   background: rgba(4, 6, 10, 0.68);
 }
 
 .levels-content,
-.resize-content {
+.resize-content,
+.filter-content {
   display: grid;
   gap: 16px;
   padding: 18px;
@@ -700,6 +703,55 @@ dl {
   font-size: 14px;
 }
 
+.filter-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: end;
+}
+
+.filter-grid label {
+  display: grid;
+  gap: 7px;
+  color: #96a39d;
+  font-size: 13px;
+}
+
+.filter-grid select {
+  min-height: 36px;
+  padding: 0 10px;
+}
+
+.kernel-editor {
+  width: min(100%, 360px);
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.kernel-editor input {
+  min-width: 0;
+  min-height: 48px;
+  padding: 0 8px;
+  text-align: center;
+}
+
+.filter-channels {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 0;
+  padding: 12px;
+  border: 1px solid #2f3540;
+  border-radius: 8px;
+}
+
+.filter-channels legend {
+  padding: 0 6px;
+  color: #96a39d;
+  font-size: 13px;
+}
+
 .validation-message {
   padding: 10px 12px;
   color: #ffb7ad;
@@ -829,8 +881,13 @@ dl {
   .levels-row,
   .levels-values,
   .resize-grid,
-  .pixel-summary {
+  .pixel-summary,
+  .filter-grid {
     grid-template-columns: 1fr;
+  }
+
+  .kernel-editor {
+    width: 100%;
   }
 
   .levels-actions {
