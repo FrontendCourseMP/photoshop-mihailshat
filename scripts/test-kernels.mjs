@@ -73,6 +73,14 @@ const redOnly = await applyKernelToImageData(source, {
 assert.deepEqual(getPixel(redOnly, 1, 1), [50, 5, 5, 255]);
 assert.deepEqual(getPixel(redOnly, 0, 0), [23, 1, 1, 255]);
 
+const grayChannel = await applyKernelToImageData(source, {
+  kernel: KERNEL_PRESETS.boxBlur.values,
+  channels: ['gray'],
+  edgeHandling: EDGE_HANDLING.copy.key,
+  rowsPerFrame: 99,
+});
+assert.deepEqual(getPixel(grayChannel, 0, 0), [23, 2, 2, 255]);
+
 const blackEdge = await applyKernelToImageData(source, {
   kernel: KERNEL_PRESETS.boxBlur.values,
   channels: ['red'],

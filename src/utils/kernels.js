@@ -37,11 +37,12 @@ export const KERNEL_PRESETS = {
   },
 };
 
-const CHANNEL_INDEXES = {
-  red: 0,
-  green: 1,
-  blue: 2,
-  alpha: 3,
+const CHANNEL_OFFSETS = {
+  gray: [0, 1, 2],
+  red: [0],
+  green: [1],
+  blue: [2],
+  alpha: [3],
 };
 
 function clampByte(value) {
@@ -102,7 +103,7 @@ export async function applyKernelToImageData(imageData, options) {
     throw new Error('Ядро должно содержать 9 числовых значений.');
   }
 
-  const selectedChannels = options.channels?.filter((channel) => channel in CHANNEL_INDEXES) ?? [];
+  const selectedChannels = options.channels?.filter((channel) => channel in CHANNEL_OFFSETS) ?? [];
 
   if (selectedChannels.length === 0) {
     throw new Error('Выберите хотя бы один канал для фильтрации.');
@@ -112,7 +113,7 @@ export async function applyKernelToImageData(imageData, options) {
   const result = new ImageData(new Uint8ClampedArray(imageData.data), imageData.width, imageData.height);
   const source = imageData.data;
   const target = result.data;
-  const channelOffsets = selectedChannels.map((channel) => CHANNEL_INDEXES[channel]);
+  const channelOffsets = selectedChannels.flatMap((channel) => CHANNEL_OFFSETS[channel]);
   const { width, height } = imageData;
   const rowsPerFrame = options.rowsPerFrame ?? 24;
 
@@ -146,7 +147,7 @@ export async function applyKernelToImageData(imageData, options) {
 }
 
 export async function applyMedianFilterToImageData(imageData, options) {
-  const selectedChannels = options.channels?.filter((channel) => channel in CHANNEL_INDEXES) ?? [];
+  const selectedChannels = options.channels?.filter((channel) => channel in CHANNEL_OFFSETS) ?? [];
 
   if (selectedChannels.length === 0) {
     throw new Error('Выберите хотя бы один канал для фильтрации.');
@@ -156,7 +157,7 @@ export async function applyMedianFilterToImageData(imageData, options) {
   const result = new ImageData(new Uint8ClampedArray(imageData.data), imageData.width, imageData.height);
   const source = imageData.data;
   const target = result.data;
-  const channelOffsets = selectedChannels.map((channel) => CHANNEL_INDEXES[channel]);
+  const channelOffsets = selectedChannels.flatMap((channel) => CHANNEL_OFFSETS[channel]);
   const { width, height } = imageData;
   const rowsPerFrame = options.rowsPerFrame ?? 24;
 

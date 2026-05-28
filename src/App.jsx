@@ -13,6 +13,7 @@ import {
   RotateCcw,
   SlidersHorizontal,
   Upload,
+  X,
 } from 'lucide-react';
 import { decodeGb7, encodeGb7, imageHasTransparency } from './utils/gb7.js';
 import { INTERPOLATION_METHODS, clampScale, scaleImageData } from './utils/interpolation.js';
@@ -272,7 +273,7 @@ function createDefaultLevelsSettings(mode) {
 function normalizeLevels(levels) {
   const black = Math.min(Math.max(Number(levels.black), 0), 254);
   const white = Math.max(Math.min(Number(levels.white), 255), black + 1);
-  const gamma = Math.min(Math.max(Number(levels.gamma), 0.1), 9.9);
+  const gamma = Math.round(Math.min(Math.max(Number(levels.gamma), 0.1), 9.9) * 100) / 100;
 
   return { black, white, gamma };
 }
@@ -513,6 +514,8 @@ function ChannelPreview({ channel, imageData, isActive, onToggle }) {
 
 function AppDialog({ open, className, onClose, children }) {
   const dialogRef = useRef(null);
+  const dragRef = useRef(null);
+  const [dialogOffset, setDialogOffset] = useState({ x: 0, y: 0 });
 
   useEffect(() => {
     const dialog = dialogRef.current;
@@ -522,6 +525,7 @@ function AppDialog({ open, className, onClose, children }) {
     }
 
     if (open && !dialog.open) {
+      setDialogOffset({ x: 0, y: 0 });
       dialog.showModal();
     }
 
@@ -530,10 +534,82 @@ function AppDialog({ open, className, onClose, children }) {
     }
   }, [open]);
 
+  useEffect(() => {
+    if (!open) {
+      return undefined;
+    }
+
+    function handlePointerMove(event) {
+      if (!dragRef.current) {
+        return;
+      }
+
+      let nextX = dragRef.current.startX + event.clientX - dragRef.current.pointerX;
+      let nextY = dragRef.current.startY + event.clientY - dragRef.current.pointerY;
+      const margin = 14;
+      const deltaX = nextX - dragRef.current.startX;
+      const deltaY = nextY - dragRef.current.startY;
+      const left = dragRef.current.rect.left + deltaX;
+      const right = dragRef.current.rect.right + deltaX;
+      const top = dragRef.current.rect.top + deltaY;
+      const bottom = dragRef.current.rect.bottom + deltaY;
+
+      if (left < margin) {
+        nextX += margin - left;
+      }
+
+      if (right > window.innerWidth - margin) {
+        nextX -= right - (window.innerWidth - margin);
+      }
+
+      if (top < margin) {
+        nextY += margin - top;
+      }
+
+      if (bottom > window.innerHeight - margin) {
+        nextY -= bottom - (window.innerHeight - margin);
+      }
+
+      setDialogOffset({ x: nextX, y: nextY });
+    }
+
+    function handlePointerUp() {
+      dragRef.current = null;
+    }
+
+    window.addEventListener('pointermove', handlePointerMove);
+    window.addEventListener('pointerup', handlePointerUp);
+
+    return () => {
+      window.removeEventListener('pointermove', handlePointerMove);
+      window.removeEventListener('pointerup', handlePointerUp);
+    };
+  }, [open]);
+
+  function startDialogDrag(event) {
+    if (
+      event.button !== 0 ||
+      !event.target.closest('[data-dialog-drag-handle]') ||
+      event.target.closest('button, input, select, textarea, label, a')
+    ) {
+      return;
+    }
+
+    dragRef.current = {
+      pointerX: event.clientX,
+      pointerY: event.clientY,
+      startX: dialogOffset.x,
+      startY: dialogOffset.y,
+      rect: dialogRef.current.getBoundingClientRect(),
+    };
+  }
+
   return (
     <dialog
       ref={dialogRef}
       className={className}
+      style={{ transform: `translate(${dialogOffset.x}px, ${dialogOffset.y}px)` }}
+      onPointerDown={startDialogDrag}
       onCancel={(event) => {
         event.preventDefault();
         onClose();
@@ -669,6 +745,8 @@ export default function App() {
 
   useEffect(() => {
     if (!filterOpen || !filterPreview || !filterBaseImageData || filterError) {
+      filterPreviewJobRef.current += 1;
+
       if (!levelsOpen) {
         setPreviewImageData(null);
       }
@@ -864,7 +942,7 @@ export default function App() {
     }
 
     if (mode.startsWith('grayscale')) {
-      const options = [{ key: 'red', label: 'Gray' }];
+      const options = [{ key: 'gray', label: 'Gray' }];
 
       if (mode.includes('alpha')) {
         options.push({ key: 'alpha', label: 'Alpha' });
@@ -1565,12 +1643,12 @@ export default function App() {
       <AppDialog open={levelsOpen} className="levels-dialog" onClose={cancelLevels}>
         <form method="dialog" className="levels-content">
           <div className="levels-header">
-            <div>
+            <div data-dialog-drag-handle>
               <h2>Уровни</h2>
               <p>Градационная коррекция изображения</p>
             </div>
             <button className="icon-button" type="button" onClick={cancelLevels} title="Закрыть">
-              <RotateCcw size={18} />
+              <X size={18} />
             </button>
           </div>
 
@@ -1619,9 +1697,9 @@ export default function App() {
               <input
                 type="range"
                 min="0"
-                max={currentLevels.white - 1}
+                max="255"
                 value={currentLevels.black}
-                onChange={(event) => updateCurrentLevels({ black: Number(event.target.value) })}
+                onChange={(event) => updateCurrentLevels({ black: Math.min(Number(event.target.value), currentLevels.white - 1) })}
               />
             </label>
 
@@ -1629,10 +1707,17 @@ export default function App() {
               <span>Полутона: γ {currentLevels.gamma.toFixed(2)}</span>
               <input
                 type="range"
-                min={currentLevels.black + 1}
-                max={currentLevels.white - 1}
+                min="0"
+                max="255"
                 value={middleLevel}
-                onChange={(event) => updateCurrentLevels({ gamma: middleToGamma(Number(event.target.value), currentLevels) })}
+                onChange={(event) => {
+                  const middle = Math.min(
+                    Math.max(Number(event.target.value), currentLevels.black + 1),
+                    currentLevels.white - 1,
+                  );
+
+                  updateCurrentLevels({ gamma: middleToGamma(middle, currentLevels) });
+                }}
               />
             </label>
 
@@ -1640,10 +1725,10 @@ export default function App() {
               <span>Белая точка: {currentLevels.white}</span>
               <input
                 type="range"
-                min={currentLevels.black + 1}
+                min="0"
                 max="255"
                 value={currentLevels.white}
-                onChange={(event) => updateCurrentLevels({ white: Number(event.target.value) })}
+                onChange={(event) => updateCurrentLevels({ white: Math.max(Number(event.target.value), currentLevels.black + 1) })}
               />
             </label>
           </div>
@@ -1665,7 +1750,7 @@ export default function App() {
                 type="number"
                 min="0.1"
                 max="9.9"
-                step="0.1"
+                step="0.01"
                 value={currentLevels.gamma}
                 onChange={(event) => updateCurrentLevels({ gamma: Number(event.target.value) })}
               />
@@ -1699,12 +1784,12 @@ export default function App() {
       <AppDialog open={filterOpen} className="filter-dialog" onClose={cancelFilter}>
         <form method="dialog" className="filter-content">
           <div className="levels-header">
-            <div>
+            <div data-dialog-drag-handle>
               <h2>Фильтр Custom</h2>
               <p>Свёртка изображения ядром 3x3</p>
             </div>
             <button className="icon-button" type="button" onClick={cancelFilter} title="Закрыть">
-              <RotateCcw size={18} />
+              <X size={18} />
             </button>
           </div>
 
@@ -1809,12 +1894,12 @@ export default function App() {
       <AppDialog open={resizeOpen} className="resize-dialog" onClose={cancelResize}>
         <form method="dialog" className="resize-content">
           <div className="levels-header">
-            <div>
+            <div data-dialog-drag-handle>
               <h2>Размер изображения</h2>
               <p>Изменение реального количества пикселей</p>
             </div>
             <button className="icon-button" type="button" onClick={cancelResize} title="Закрыть">
-              <RotateCcw size={18} />
+              <X size={18} />
             </button>
           </div>
 
