@@ -54,7 +54,6 @@ const DEFAULT_LEVELS = {
   black: 0,
   white: 255,
   gamma: 1,
-  middle: 127.5,
 };
 const FILTER_MODES = {
   kernel: 'kernel',
@@ -274,29 +273,10 @@ function createDefaultLevelsSettings(mode) {
 function normalizeLevels(levels) {
   const black = Math.min(Math.max(Number(levels.black), 0), 254);
   const white = Math.max(Math.min(Number(levels.white), 255), black + 1);
-  const fallbackMiddle = gammaToMiddleFromGamma({ black, white, gamma: levels.gamma ?? DEFAULT_LEVELS.gamma });
-  const rawMiddle = Number.isFinite(Number(levels.middle)) ? Number(levels.middle) : fallbackMiddle;
-  const middle = Math.min(Math.max(rawMiddle, black + 1), white - 1);
-  const gamma = Math.round(middleToGammaFromMiddle(middle, { black, white }) * 100) / 100;
+  const rawGamma = Number.isFinite(Number(levels.gamma)) ? Number(levels.gamma) : DEFAULT_LEVELS.gamma;
+  const gamma = Math.round(Math.min(Math.max(rawGamma, 0.1), 9.9) * 100) / 100;
 
-  return { black, white, gamma, middle };
-}
-
-function gammaToMiddleFromGamma(levels) {
-  const black = Math.min(Math.max(Number(levels.black), 0), 254);
-  const white = Math.max(Math.min(Number(levels.white), 255), black + 1);
-  const gamma = Math.min(Math.max(Number(levels.gamma), 0.1), 9.9);
-  const normalized = 0.5 ** (1 / gamma);
-
-  return Math.round(black + normalized * (white - black));
-}
-
-function middleToGammaFromMiddle(middle, levels) {
-  const black = Math.min(Math.max(Number(levels.black), 0), 254);
-  const white = Math.max(Math.min(Number(levels.white), 255), black + 1);
-  const normalized = Math.min(Math.max((middle - black) / (white - black), 0.001), 0.999);
-
-  return Math.min(Math.max(Math.log(0.5) / Math.log(normalized), 0.1), 9.9);
+  return { black, white, gamma };
 }
 
 function makeLevelsLut(levels) {
@@ -676,7 +656,6 @@ export default function App() {
   const channels = useMemo(() => (channelMode ? getChannelList(channelMode) : []), [channelMode]);
   const levelsChannels = useMemo(() => getLevelsChannels(channelMode), [channelMode]);
   const currentLevels = normalizeLevels(levelsSettings[levelsChannel] ?? DEFAULT_LEVELS);
-  const middleLevel = currentLevels.middle;
   const resizeTarget = getResizeTarget();
   const resizeError = validateResizeTarget(resizeTarget);
   const filterChannelOptions = getFilterChannelOptions(channelMode);
@@ -1714,18 +1693,11 @@ export default function App() {
               <span>Полутона: γ {currentLevels.gamma.toFixed(2)}</span>
               <input
                 type="range"
-                min="0"
-                max="255"
+                min="0.1"
+                max="9.9"
                 step="0.01"
-                value={middleLevel}
-                onChange={(event) => {
-                  const middle = Math.min(
-                    Math.max(Number(event.target.value), currentLevels.black + 1),
-                    currentLevels.white - 1,
-                  );
-
-                  updateCurrentLevels({ middle });
-                }}
+                value={currentLevels.gamma}
+                onChange={(event) => updateCurrentLevels({ gamma: Number(event.target.value) })}
               />
             </label>
 
@@ -1760,12 +1732,7 @@ export default function App() {
                 max="9.9"
                 step="0.01"
                 value={currentLevels.gamma}
-                onChange={(event) => updateCurrentLevels({
-                  middle: gammaToMiddleFromGamma({
-                    ...currentLevels,
-                    gamma: Number(event.target.value),
-                  }),
-                })}
+                onChange={(event) => updateCurrentLevels({ gamma: Number(event.target.value) })}
               />
             </label>
             <label>
