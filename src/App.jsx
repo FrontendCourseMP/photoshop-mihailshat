@@ -20,8 +20,6 @@ import { INTERPOLATION_METHODS, clampScale, scaleImageData } from './utils/inter
 import {
   EDGE_HANDLING,
   KERNEL_PRESETS,
-  applyKernelToImageData,
-  applyMedianFilterToImageData,
   getPresetKernel,
   normalizeKernelValues,
 } from './utils/kernels.js';
@@ -59,6 +57,21 @@ const FILTER_MODES = {
   kernel: 'kernel',
   median: 'median',
 };
+const FILTER_PRESET_OPTIONS = [
+  ...Object.values(KERNEL_PRESETS).map((preset) => ({
+    key: preset.key,
+    label: preset.label,
+  })),
+  {
+    key: FILTER_MODES.median,
+    label: 'Медианный 3x3',
+  },
+  {
+    key: 'custom',
+    label: 'Пользовательское ядро',
+  },
+];
+const PREVIEW_MAX_SIZE = 320;
 
 function getExtension(fileName) {
   return fileName.split('.').pop()?.toLowerCase() ?? '';
@@ -198,6 +211,23 @@ function createEmptyImageData(width, height) {
 
 function cloneImageData(imageData) {
   return new ImageData(new Uint8ClampedArray(imageData.data), imageData.width, imageData.height);
+}
+
+function createPreviewImageData(imageData, maxSize = PREVIEW_MAX_SIZE) {
+  const maxSide = Math.max(imageData.width, imageData.height);
+
+  if (maxSide <= maxSize) {
+    return cloneImageData(imageData);
+  }
+
+  const scale = maxSize / maxSide;
+
+  return scaleImageData(
+    imageData,
+    Math.max(1, Math.round(imageData.width * scale)),
+    Math.max(1, Math.round(imageData.height * scale)),
+    INTERPOLATION_METHODS.bilinear.key,
+  );
 }
 
 function isOnlyAlphaVisible(activeChannels) {
@@ -499,6 +529,36 @@ function ChannelPreview({ channel, imageData, isActive, onToggle }) {
   );
 }
 
+function ImageDataPreview({ imageData, title, status }) {
+  const previewRef = useRef(null);
+
+  useEffect(() => {
+    if (!imageData || !previewRef.current) {
+      return;
+    }
+
+    const preview = previewRef.current;
+    const context = preview.getContext('2d');
+
+    preview.width = imageData.width;
+    preview.height = imageData.height;
+    context.putImageData(imageData, 0, 0);
+  }, [imageData]);
+
+  return (
+    <section className="dialog-preview">
+      <div className="dialog-preview-header">
+        <strong>{title}</strong>
+        <span>{imageData ? `${imageData.width} x ${imageData.height}` : '-'}</span>
+      </div>
+      <div className="dialog-preview-frame">
+        {imageData ? <canvas ref={previewRef} /> : <p>{status || 'Нет данных для предпросмотра.'}</p>}
+      </div>
+      {status && imageData && <p className="dialog-preview-status">{status}</p>}
+    </section>
+  );
+}
+
 function AppDialog({ open, className, onClose, children }) {
   const dialogRef = useRef(null);
   const dragRef = useRef(null);
@@ -612,11 +672,19 @@ export default function App() {
   const canvasAreaRef = useRef(null);
   const histogramRef = useRef(null);
   const fileInputRef = useRef(null);
+  const filterWorkerRef = useRef(null);
+  const filterWorkerCallbacksRef = useRef(new Map());
+  const filterWorkerRequestIdRef = useRef(0);
   const filterPreviewJobRef = useRef(0);
   const [originalImageData, setOriginalImageData] = useState(null);
   const [previewImageData, setPreviewImageData] = useState(null);
   const [levelsBaseImageData, setLevelsBaseImageData] = useState(null);
+  const [levelsPreviewBaseImageData, setLevelsPreviewBaseImageData] = useState(null);
+  const [levelsDialogPreviewImageData, setLevelsDialogPreviewImageData] = useState(null);
   const [filterBaseImageData, setFilterBaseImageData] = useState(null);
+  const [filterPreviewBaseImageData, setFilterPreviewBaseImageData] = useState(null);
+  const [filterDialogPreviewImageData, setFilterDialogPreviewImageData] = useState(null);
+  const [filterPreviewStatus, setFilterPreviewStatus] = useState('');
   const [imageInfo, setImageInfo] = useState(null);
   const [channelMode, setChannelMode] = useState(null);
   const [activeChannels, setActiveChannels] = useState({});
@@ -634,7 +702,6 @@ export default function App() {
   const [resizeLinked, setResizeLinked] = useState(true);
   const [resizeMethod, setResizeMethod] = useState(INTERPOLATION_METHODS.bilinear.key);
   const [filterOpen, setFilterOpen] = useState(false);
-  const [filterMode, setFilterMode] = useState(FILTER_MODES.kernel);
   const [filterPreview, setFilterPreview] = useState(true);
   const [filterPreset, setFilterPreset] = useState(KERNEL_PRESETS.identity.key);
   const [kernelValues, setKernelValues] = useState(getPresetKernel(KERNEL_PRESETS.identity.key).map(formatKernelValue));
@@ -660,6 +727,85 @@ export default function App() {
   const resizeError = validateResizeTarget(resizeTarget);
   const filterChannelOptions = getFilterChannelOptions(channelMode);
   const filterError = validateFilterSettings();
+
+  useEffect(() => {
+    return () => {
+      filterWorkerRef.current?.terminate();
+      filterWorkerCallbacksRef.current.clear();
+    };
+  }, []);
+
+  function getFilterWorker() {
+    if (filterWorkerRef.current) {
+      return filterWorkerRef.current;
+    }
+
+    const worker = new Worker(new URL('./workers/filterWorker.js', import.meta.url), { type: 'module' });
+
+    worker.onmessage = (event) => {
+      const { id, error: workerError, width, height, buffer } = event.data;
+      const callback = filterWorkerCallbacksRef.current.get(id);
+
+      if (!callback) {
+        return;
+      }
+
+      filterWorkerCallbacksRef.current.delete(id);
+
+      if (workerError) {
+        callback.reject(new Error(workerError));
+        return;
+      }
+
+      callback.resolve(new ImageData(new Uint8ClampedArray(buffer), width, height));
+    };
+
+    worker.onerror = (event) => {
+      filterWorkerCallbacksRef.current.forEach((callback) => {
+        callback.reject(new Error(event.message || 'Worker фильтра завершился с ошибкой.'));
+      });
+      filterWorkerCallbacksRef.current.clear();
+    };
+
+    filterWorkerRef.current = worker;
+
+    return worker;
+  }
+
+  function runFilterInWorker(imageData, options) {
+    const worker = getFilterWorker();
+    const id = filterWorkerRequestIdRef.current + 1;
+    const sourceData = new Uint8ClampedArray(imageData.data);
+
+    filterWorkerRequestIdRef.current = id;
+
+    return new Promise((resolve, reject) => {
+      filterWorkerCallbacksRef.current.set(id, { resolve, reject });
+      worker.postMessage(
+        {
+          id,
+          width: imageData.width,
+          height: imageData.height,
+          buffer: sourceData.buffer,
+          ...options,
+        },
+        [sourceData.buffer],
+      );
+    });
+  }
+
+  function getCurrentFilterMode() {
+    return filterPreset === FILTER_MODES.median ? FILTER_MODES.median : FILTER_MODES.kernel;
+  }
+
+  function getCurrentFilterOptions() {
+    return {
+      mode: getCurrentFilterMode(),
+      channels: getSelectedFilterChannels(),
+      edgeHandling: filterEdgeHandling,
+      kernel: normalizeKernelValues(kernelValues),
+    };
+  }
 
   function drawImageData(imageData, scale = displayScale, method = displayInterpolation) {
     const canvas = canvasRef.current;
@@ -694,7 +840,12 @@ export default function App() {
     setOriginalImageData(imageData);
     setPreviewImageData(null);
     setLevelsBaseImageData(null);
+    setLevelsPreviewBaseImageData(null);
+    setLevelsDialogPreviewImageData(null);
     setFilterBaseImageData(null);
+    setFilterPreviewBaseImageData(null);
+    setFilterDialogPreviewImageData(null);
+    setFilterPreviewStatus('');
     setImageInfo({
       ...info,
       channelMode: getModeLabel(mode),
@@ -730,43 +881,59 @@ export default function App() {
   }, [levelsOpen, levelsPreview, levelsBaseImageData, levelsSettings]);
 
   useEffect(() => {
-    if (!filterOpen || !filterPreview || !filterBaseImageData || filterError) {
-      filterPreviewJobRef.current += 1;
+    if (!levelsOpen || !levelsPreviewBaseImageData) {
+      setLevelsDialogPreviewImageData(null);
+      return;
+    }
 
-      if (!levelsOpen) {
-        setPreviewImageData(null);
-      }
+    const frame = requestAnimationFrame(() => {
+      setLevelsDialogPreviewImageData(
+        levelsPreview ? applyLevelsToImage(levelsPreviewBaseImageData, levelsSettings) : levelsPreviewBaseImageData,
+      );
+    });
+
+    return () => cancelAnimationFrame(frame);
+  }, [levelsOpen, levelsPreview, levelsPreviewBaseImageData, levelsSettings]);
+
+  useEffect(() => {
+    if (!filterOpen || !filterPreviewBaseImageData) {
+      filterPreviewJobRef.current += 1;
+      setFilterDialogPreviewImageData(null);
+      setFilterPreviewStatus('');
+      setPreviewImageData(null);
+      return;
+    }
+
+    if (!filterPreview || filterError) {
+      filterPreviewJobRef.current += 1;
+      setFilterDialogPreviewImageData(filterPreviewBaseImageData);
+      setFilterPreviewStatus(filterPreview ? filterError : 'Предпросмотр выключен.');
+      setPreviewImageData(null);
       return;
     }
 
     const jobId = filterPreviewJobRef.current + 1;
     filterPreviewJobRef.current = jobId;
+    setFilterPreviewStatus('Предпросмотр считается...');
+
     const frame = requestAnimationFrame(async () => {
       try {
-        const filterOptions = {
-          channels: getSelectedFilterChannels(),
-          edgeHandling: filterEdgeHandling,
-        };
-        const filteredImageData =
-          filterMode === FILTER_MODES.median
-            ? await applyMedianFilterToImageData(filterBaseImageData, filterOptions)
-            : await applyKernelToImageData(filterBaseImageData, {
-                ...filterOptions,
-                kernel: normalizeKernelValues(kernelValues),
-              });
+        const filteredImageData = await runFilterInWorker(filterPreviewBaseImageData, getCurrentFilterOptions());
 
         if (filterPreviewJobRef.current === jobId) {
-          setPreviewImageData(filteredImageData);
+          setFilterDialogPreviewImageData(filteredImageData);
+          setFilterPreviewStatus('');
         }
-      } catch {
+      } catch (currentError) {
         if (filterPreviewJobRef.current === jobId) {
-          setPreviewImageData(null);
+          setFilterDialogPreviewImageData(filterPreviewBaseImageData);
+          setFilterPreviewStatus(currentError.message);
         }
       }
     });
 
     return () => cancelAnimationFrame(frame);
-  }, [filterOpen, filterMode, filterPreview, filterBaseImageData, kernelValues, filterChannels, filterEdgeHandling, filterError]);
+  }, [filterOpen, filterPreset, filterPreview, filterPreviewBaseImageData, kernelValues, filterChannels, filterEdgeHandling, filterError]);
 
   useEffect(() => {
     if (!levelsBaseImageData || !histogramRef.current) {
@@ -913,8 +1080,11 @@ export default function App() {
     }
 
     const baseImageData = cloneImageData(originalImageData);
+    const previewBaseImageData = createPreviewImageData(baseImageData);
 
     setLevelsBaseImageData(baseImageData);
+    setLevelsPreviewBaseImageData(previewBaseImageData);
+    setLevelsDialogPreviewImageData(previewBaseImageData);
     setLevelsSettings(createDefaultLevelsSettings(channelMode));
     setLevelsChannel('master');
     setLevelsPreview(true);
@@ -967,7 +1137,7 @@ export default function App() {
       return filterOpen ? 'Сначала откройте изображение.' : '';
     }
 
-    if (filterMode === FILTER_MODES.kernel && !normalizeKernelValues(kernelValues)) {
+    if (getCurrentFilterMode() === FILTER_MODES.kernel && !normalizeKernelValues(kernelValues)) {
       return 'Все 9 значений ядра должны быть числами.';
     }
 
@@ -983,8 +1153,12 @@ export default function App() {
       return;
     }
 
+    const previewBaseImageData = createPreviewImageData(originalImageData);
+
     setFilterBaseImageData(cloneImageData(originalImageData));
-    setFilterMode(FILTER_MODES.kernel);
+    setFilterPreviewBaseImageData(previewBaseImageData);
+    setFilterDialogPreviewImageData(previewBaseImageData);
+    setFilterPreviewStatus('');
     setFilterPreset(KERNEL_PRESETS.identity.key);
     setKernelValues(getPresetKernel(KERNEL_PRESETS.identity.key).map(formatKernelValue));
     setFilterChannels(createDefaultFilterChannels(channelMode));
@@ -997,13 +1171,15 @@ export default function App() {
     filterPreviewJobRef.current += 1;
     setPreviewImageData(null);
     setFilterBaseImageData(null);
+    setFilterPreviewBaseImageData(null);
+    setFilterDialogPreviewImageData(null);
+    setFilterPreviewStatus('');
     setFilterOpen(false);
     setIsFiltering(false);
   }
 
   function resetFilter() {
     setFilterPreset(KERNEL_PRESETS.identity.key);
-    setFilterMode(FILTER_MODES.kernel);
     setKernelValues(getPresetKernel(KERNEL_PRESETS.identity.key).map(formatKernelValue));
     setFilterChannels(createDefaultFilterChannels(channelMode));
     setFilterEdgeHandling(EDGE_HANDLING.copy.key);
@@ -1012,7 +1188,10 @@ export default function App() {
 
   function selectFilterPreset(presetKey) {
     setFilterPreset(presetKey);
-    setKernelValues(getPresetKernel(presetKey).map(formatKernelValue));
+
+    if (presetKey in KERNEL_PRESETS) {
+      setKernelValues(getPresetKernel(presetKey).map(formatKernelValue));
+    }
   }
 
   function updateKernelValue(index, value) {
@@ -1039,20 +1218,19 @@ export default function App() {
       const filterOptions = {
         channels: getSelectedFilterChannels(),
         edgeHandling: filterEdgeHandling,
+        mode: getCurrentFilterMode(),
+        kernel: normalizeKernelValues(kernelValues),
       };
-      const filteredImageData =
-        filterMode === FILTER_MODES.median
-          ? await applyMedianFilterToImageData(filterBaseImageData, filterOptions)
-          : await applyKernelToImageData(filterBaseImageData, {
-              ...filterOptions,
-              kernel: normalizeKernelValues(kernelValues),
-            });
+      const filteredImageData = await runFilterInWorker(filterBaseImageData, filterOptions);
       const mode = getImageMode(filteredImageData);
       const nextChannels = Object.fromEntries(getChannelList(mode).map((channel) => [channel.key, true]));
 
       setOriginalImageData(filteredImageData);
       setPreviewImageData(null);
       setFilterBaseImageData(null);
+      setFilterPreviewBaseImageData(null);
+      setFilterDialogPreviewImageData(null);
+      setFilterPreviewStatus('');
       setImageInfo((current) => ({
         ...current,
         channelMode: getModeLabel(mode),
@@ -1094,6 +1272,8 @@ export default function App() {
   function cancelLevels() {
     setPreviewImageData(null);
     setLevelsBaseImageData(null);
+    setLevelsPreviewBaseImageData(null);
+    setLevelsDialogPreviewImageData(null);
     setLevelsOpen(false);
   }
 
@@ -1107,6 +1287,8 @@ export default function App() {
     setOriginalImageData(correctedImageData);
     setPreviewImageData(null);
     setLevelsBaseImageData(null);
+    setLevelsPreviewBaseImageData(null);
+    setLevelsDialogPreviewImageData(null);
     setFilterBaseImageData(null);
     setPickedColor(null);
     setLevelsOpen(false);
@@ -1677,6 +1859,12 @@ export default function App() {
             </div>
           </div>
 
+          <ImageDataPreview
+            imageData={levelsDialogPreviewImageData}
+            title="Предпросмотр уровней"
+            status={levelsPreview ? '' : 'Предпросмотр выключен.'}
+          />
+
           <div className="level-sliders">
             <label>
               <span>Черная точка: {currentLevels.black}</span>
@@ -1775,26 +1963,13 @@ export default function App() {
 
           <div className="filter-grid">
             <label>
-              Тип фильтра
-              <select value={filterMode} onChange={(event) => setFilterMode(event.target.value)}>
-                <option value={FILTER_MODES.kernel}>Custom kernel 3x3</option>
-                <option value={FILTER_MODES.median}>Медианный 3x3</option>
-              </select>
-            </label>
-
-            <label>
-              Предустановка
-              <select
-                value={filterPreset}
-                onChange={(event) => selectFilterPreset(event.target.value)}
-                disabled={filterMode === FILTER_MODES.median}
-              >
-                {Object.values(KERNEL_PRESETS).map((preset) => (
+              Фильтр
+              <select value={filterPreset} onChange={(event) => selectFilterPreset(event.target.value)}>
+                {FILTER_PRESET_OPTIONS.map((preset) => (
                   <option key={preset.key} value={preset.key}>
                     {preset.label}
                   </option>
                 ))}
-                <option value="custom">Пользовательское ядро</option>
               </select>
             </label>
 
@@ -1827,11 +2002,17 @@ export default function App() {
                 step="0.0001"
                 value={value}
                 onChange={(event) => updateKernelValue(index, event.target.value)}
-                disabled={filterMode === FILTER_MODES.median}
+                disabled={getCurrentFilterMode() === FILTER_MODES.median}
                 aria-label={`Значение ядра ${index + 1}`}
               />
             ))}
           </div>
+
+          <ImageDataPreview
+            imageData={filterDialogPreviewImageData}
+            title="Предпросмотр фильтра"
+            status={filterPreviewStatus}
+          />
 
           <fieldset className="filter-channels">
             <legend>Каналы</legend>
@@ -1850,7 +2031,7 @@ export default function App() {
           <div className="resize-result">
             {isFiltering
               ? 'Фильтр применяется...'
-              : filterMode === FILTER_MODES.median
+              : getCurrentFilterMode() === FILTER_MODES.median
                 ? 'Медианный фильтр заменяет значение выбранного канала медианой соседей 3x3.'
                 : 'Размер изображения сохраняется после обработки краёв.'}
           </div>

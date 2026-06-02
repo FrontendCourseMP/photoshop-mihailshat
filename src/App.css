@@ -511,8 +511,19 @@ dl {
 }
 
 .levels-dialog,
-.resize-dialog,
 .filter-dialog {
+  width: min(920px, calc(100vw - 28px));
+  max-height: calc(100vh - 28px);
+  padding: 0;
+  overflow: auto;
+  border: 1px solid #39414c;
+  border-radius: 8px;
+  background: #191d24;
+  color: #eef4f1;
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.48);
+}
+
+.resize-dialog {
   width: min(760px, calc(100vw - 28px));
   max-height: calc(100vh - 28px);
   padding: 0;
@@ -527,7 +538,7 @@ dl {
 .levels-dialog::backdrop,
 .resize-dialog::backdrop,
 .filter-dialog::backdrop {
-  background: rgba(4, 6, 10, 0.18);
+  background: transparent;
 }
 
 .levels-content,
@@ -625,6 +636,63 @@ dl {
   font-size: 12px;
 }
 
+.dialog-preview {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid #2f3540;
+  border-radius: 8px;
+  background: #141922;
+}
+
+.dialog-preview-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  color: #f7fbf8;
+  font-size: 13px;
+}
+
+.dialog-preview-header span,
+.dialog-preview-status {
+  color: #96a39d;
+  font-size: 12px;
+}
+
+.dialog-preview-frame {
+  min-height: 160px;
+  display: grid;
+  place-items: center;
+  overflow: auto;
+  border-radius: 6px;
+  background-color: #101319;
+  background-image:
+    linear-gradient(45deg, #252b33 25%, transparent 25%),
+    linear-gradient(-45deg, #252b33 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, #252b33 75%),
+    linear-gradient(-45deg, transparent 75%, #252b33 75%);
+  background-position:
+    0 0,
+    0 8px,
+    8px -8px,
+    -8px 0;
+  background-size: 16px 16px;
+}
+
+.dialog-preview-frame canvas {
+  display: block;
+  max-width: 100%;
+  max-height: 260px;
+  box-shadow: 0 12px 24px rgba(0, 0, 0, 0.36);
+}
+
+.dialog-preview-frame p {
+  padding: 18px;
+  color: #96a39d;
+  font-size: 13px;
+}
+
 .level-sliders {
   display: grid;
   gap: 12px;
@@ -719,7 +787,7 @@ dl {
 
 .filter-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr) minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr) auto;
   gap: 12px;
   align-items: end;
 }
